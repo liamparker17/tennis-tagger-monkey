@@ -41,14 +41,21 @@ class Detector:
     replacing the old separate PlayerDetector / BallDetector pair.
     """
 
-    def __init__(self, model_path: str, device: str = "auto"):
+    BACKENDS = ("yolo", "rtdetr")
+
+    def __init__(self, model_path: str, device: str = "auto", backend: str = "yolo"):
         """Load YOLO model and warm up.
 
         Args:
             model_path: Path to YOLO weights (.pt or .onnx).
             device: ``"auto"`` picks CUDA when available, else CPU.
                     Pass ``"cpu"`` to force CPU.
+            backend: ``"yolo"`` or ``"rtdetr"``.
         """
+        if backend not in self.BACKENDS:
+            raise ValueError(f"Unknown backend {backend!r}, expected one of {self.BACKENDS}")
+
+        self.backend = backend
         self.model: Optional[object] = None
         self.device = "cpu"
         self.ball_history: deque = deque(maxlen=30)
@@ -112,17 +119,20 @@ class Detector:
         min_conf = min(_PLAYER_CONF, _BALL_CONF)
 
         try:
-            results_batch = self.model.predict(
-                frames,
+            predict_kwargs = dict(
                 conf=min_conf,
                 classes=[CLASS_PERSON, CLASS_SPORTS_BALL],
                 verbose=False,
                 device=self.device,
-                half=(self.device != "cpu"),
-                augment=False,
                 imgsz=640,
                 max_det=20,
             )
+            if self.backend == "yolo":
+                predict_kwargs["half"] = self.device != "cpu"
+                predict_kwargs["augment"] = False
+            # rtdetr: no half, no augment
+
+            results_batch = self.model.predict(frames, **predict_kwargs)
         except Exception:
             logger.warning("Detection failed, using fallback", exc_info=True)
             return self._fallback(frames)

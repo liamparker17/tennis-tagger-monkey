@@ -77,6 +77,70 @@ class Simple3DCNN(nn.Module):
         return x
 
 
+class VideoSwinTransformer(nn.Module):
+    """Video Swin Transformer for stroke classification.
+
+    Uses a timm Swin-Tiny backbone for per-frame feature extraction,
+    followed by temporal pooling and a classification head.
+    Falls back to random features if timm is not installed.
+    """
+
+    def __init__(self, num_classes: int = 8, temporal_depth: int = CLIP_LENGTH):
+        super().__init__()
+        self.temporal_depth = temporal_depth
+
+        try:
+            import timm
+
+            self.backbone = timm.create_model(
+                "swin_tiny_patch4_window7_224",
+                num_classes=0,
+                pretrained=False,
+            )
+            backbone_dim = self.backbone.num_features
+        except ImportError:
+            logger.warning("timm not installed — VideoSwinTransformer using random features")
+            self.backbone = None
+            backbone_dim = 768
+
+        self.temporal_pool = nn.AdaptiveAvgPool1d(1)
+        self.classifier = nn.Sequential(
+            nn.Linear(backbone_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(256, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            x: Tensor of shape ``(B, C=3, T, H, W)``.
+
+        Returns:
+            Logits of shape ``(B, num_classes)``.
+        """
+        B, C, T, H, W = x.shape
+
+        if self.backbone is not None:
+            # Reshape to (B*T, C, H, W) for per-frame feature extraction
+            frames = x.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+            # Resize to 224x224 if needed
+            if H != 224 or W != 224:
+                frames = nn.functional.interpolate(frames, size=(224, 224), mode="bilinear", align_corners=False)
+            features = self.backbone(frames)  # (B*T, D)
+            features = features.reshape(B, T, -1)  # (B, T, D)
+        else:
+            # Random features fallback
+            features = torch.randn(B, T, 768, device=x.device)
+
+        # Temporal pool: (B, T, D) -> (B, D, T) -> pool -> (B, D, 1) -> (B, D)
+        features = features.permute(0, 2, 1)
+        features = self.temporal_pool(features).squeeze(-1)
+
+        return self.classifier(features)
+
+
 class StrokeClassifier:
     """Classify player clips into one of 8 stroke types.
 
@@ -87,11 +151,14 @@ class StrokeClassifier:
         # results: [{"stroke": "forehand", "confidence": 0.92}, ...]
     """
 
+    MODEL_TYPES = ("3dcnn", "swin")
+
     def __init__(
         self,
         model_path: str,
         device: str = "auto",
         confidence_threshold: float = DEFAULT_CONF_THRESHOLD,
+        model_type: str = "3dcnn",
     ):
         """
         Args:
@@ -100,7 +167,12 @@ class StrokeClassifier:
                         model is used (useful for integration tests).
             device: ``"auto"`` picks CUDA when available.
             confidence_threshold: Suppress predictions below this value.
+            model_type: ``"3dcnn"`` or ``"swin"``.
         """
+        if model_type not in self.MODEL_TYPES:
+            raise ValueError(f"Unknown model_type {model_type!r}, expected one of {self.MODEL_TYPES}")
+
+        self.model_type = model_type
         self.conf_threshold = confidence_threshold
 
         # Resolve device
@@ -109,8 +181,11 @@ class StrokeClassifier:
         else:
             self.device = torch.device(device)
 
-        # Build model
-        self._model = Simple3DCNN(num_classes=len(STROKE_CLASSES), temporal_depth=CLIP_LENGTH)
+        # Build model based on type
+        if model_type == "swin":
+            self._model = VideoSwinTransformer(num_classes=len(STROKE_CLASSES), temporal_depth=CLIP_LENGTH)
+        else:
+            self._model = Simple3DCNN(num_classes=len(STROKE_CLASSES), temporal_depth=CLIP_LENGTH)
 
         # Try to load weights
         try:
