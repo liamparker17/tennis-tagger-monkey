@@ -60,6 +60,11 @@ func (p *Pipeline) Progress() ProgressInfo {
 	return p.progress
 }
 
+// Bridge returns the underlying BridgeBackend used by this pipeline.
+func (p *Pipeline) Bridge() bridge.BridgeBackend {
+	return p.bridge
+}
+
 // Process runs the full analysis pipeline on the video at videoPath.
 // It delegates to ProcessConcurrent for improved throughput.
 func (p *Pipeline) Process(videoPath string) (*Result, error) {

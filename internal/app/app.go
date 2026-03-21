@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/liamp/tennis-tagger/internal/bridge"
 	"github.com/liamp/tennis-tagger/internal/config"
+	"github.com/liamp/tennis-tagger/internal/corrections"
 	"github.com/liamp/tennis-tagger/internal/export"
 	"github.com/liamp/tennis-tagger/internal/pipeline"
 	"github.com/liamp/tennis-tagger/internal/tactics"
@@ -14,20 +16,22 @@ import (
 // App is the top-level application struct that orchestrates the pipeline,
 // configuration, and export. It serves as the Wails binding target.
 type App struct {
-	ctx      context.Context // Wails application context, set via Startup()
-	pipeline *pipeline.Pipeline
-	config   *config.Config
-	exporter *export.DartfishExporter
-	result   *pipeline.Result
-	report   *tactics.TacticalReport
+	ctx         context.Context // Wails application context, set via Startup()
+	pipeline    *pipeline.Pipeline
+	config      *config.Config
+	exporter    *export.DartfishExporter
+	result      *pipeline.Result
+	report      *tactics.TacticalReport
+	corrections *corrections.Store
 }
 
 // NewApp creates a new App with the given config and bridge backend.
 func NewApp(cfg *config.Config, b bridge.BridgeBackend) *App {
 	return &App{
-		pipeline: pipeline.New(b, cfg),
-		config:   cfg,
-		exporter: export.NewDartfishExporter(),
+		pipeline:    pipeline.New(b, cfg),
+		config:      cfg,
+		exporter:    export.NewDartfishExporter(),
+		corrections: corrections.NewStore(filepath.Join(cfg.ModelsDir, "corrections")),
 	}
 }
 
@@ -138,6 +142,41 @@ func (a *App) GetTacticalReport() *tactics.TacticalReport {
 
 	a.report = tactics.GenerateReport(patterns, a.result.Rallies, durationSec)
 	return a.report
+}
+
+// SaveCorrection persists a user correction for later retraining.
+func (a *App) SaveCorrection(c corrections.Correction) error {
+	return a.corrections.Save(c)
+}
+
+// GetCorrectionCount returns the number of accumulated corrections.
+func (a *App) GetCorrectionCount() int {
+	return a.corrections.Count()
+}
+
+// ShouldRetrain reports whether enough corrections have accumulated to
+// justify a retraining run.
+func (a *App) ShouldRetrain() bool {
+	return a.corrections.ShouldRetrain()
+}
+
+// TriggerRetrain flushes accumulated corrections and starts a fine-tuning
+// run via the bridge backend.
+func (a *App) TriggerRetrain() (map[string]interface{}, error) {
+	batch, err := a.corrections.Flush()
+	if err != nil {
+		return nil, fmt.Errorf("flush corrections: %w", err)
+	}
+
+	cfg := bridge.TrainingConfig{Task: "fine_tune", Epochs: 5, BatchSize: 16}
+	if err := a.pipeline.Bridge().TrainModel(nil, cfg); err != nil {
+		return nil, fmt.Errorf("retrain: %w", err)
+	}
+
+	return map[string]interface{}{
+		"status":      "ok",
+		"corrections": len(batch.Corrections),
+	}, nil
 }
 
 // resultToRows converts a pipeline Result into Dartfish export rows.

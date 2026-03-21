@@ -17,6 +17,7 @@ func main() {
 	useMock := flag.Bool("mock", false, "Use MockBridge (no Python needed)")
 	pythonPath := flag.String("python", "python", "Path to Python executable")
 	liveSource := flag.String("live", "", "Live source (webcam index or RTSP URL)")
+	retrain := flag.Bool("retrain", false, "Retrain model from accumulated corrections")
 	flag.Parse()
 
 	cfg, err := config.Load("")
@@ -47,6 +48,18 @@ func main() {
 	}
 
 	a := app.NewApp(cfg, b)
+
+	if *retrain {
+		fmt.Println("Retraining from corrections...")
+		result, err := a.TriggerRetrain()
+		if err != nil {
+			slog.Error("Retrain failed", "error", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Retrain complete: %v\n", result)
+		b.Close()
+		return
+	}
 
 	if *liveSource != "" {
 		fmt.Printf("Starting live capture from: %s\n", *liveSource)
@@ -94,8 +107,12 @@ func main() {
 			fmt.Println()
 			fmt.Print(report.FormatText())
 		}
+
+		if a.ShouldRetrain() {
+			fmt.Printf("\n%d corrections accumulated. Run with --retrain to improve.\n", a.GetCorrectionCount())
+		}
 	} else {
 		fmt.Println("Tennis Tagger v2")
-		fmt.Println("Usage: tagger [--mock] [--python path] [--live source] <video.mp4>")
+		fmt.Println("Usage: tagger [--mock] [--python path] [--live source] [--retrain] <video.mp4>")
 	}
 }

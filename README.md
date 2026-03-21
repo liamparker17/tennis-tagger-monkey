@@ -71,6 +71,16 @@ Process frames from a webcam or RTSP stream in real time:
 
 Live mode prints detection counts per batch as frames are processed.
 
+## QC & Retraining
+
+Corrections accumulate as you fix ML mistakes in the UI. When enough corrections are stored, retrain the model:
+
+```bash
+./tagger --retrain
+```
+
+The CLI will also suggest retraining after video processing when the correction threshold is reached.
+
 ## Test
 
 ```bash
