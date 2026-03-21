@@ -178,6 +178,41 @@ class BridgeServer:
         fps = params.get("fps", 30.0)
         return self.analyzer.segment_rallies(detections, fps)
 
+    # ---- RPC: train -------------------------------------------------------
+
+    def rpc_train(self, params: dict) -> Any:
+        """Train a new model version."""
+        self._require_init()
+        pairs = params.get("pairs", [])
+        config = params.get("config", {})
+        return self.trainer.train(pairs, config)
+
+    # ---- RPC: fine_tune ---------------------------------------------------
+
+    def rpc_fine_tune(self, params: dict) -> Any:
+        """Fine-tune latest model with user corrections."""
+        self._require_init()
+        corrections = params.get("corrections", [])
+        config = params.get("config", {})
+        return self.trainer.fine_tune(corrections, config)
+
+    # ---- RPC: get_versions ------------------------------------------------
+
+    def rpc_get_versions(self, params: dict) -> Any:
+        """List saved model versions."""
+        self._require_init()
+        return self.trainer.get_versions()
+
+    # ---- RPC: rollback ----------------------------------------------------
+
+    def rpc_rollback(self, params: dict) -> Any:
+        """Rollback to a specific model version."""
+        self._require_init()
+        version = params.get("version", "")
+        if not version:
+            raise ValueError("version is required")
+        return self.trainer.rollback(version)
+
     # ---- Internal ---------------------------------------------------------
 
     def _require_init(self) -> None:
@@ -193,6 +228,10 @@ class BridgeServer:
             "classify_strokes": self.rpc_classify_strokes,
             "analyze_placements": self.rpc_analyze_placements,
             "segment_rallies": self.rpc_segment_rallies,
+            "train": self.rpc_train,
+            "fine_tune": self.rpc_fine_tune,
+            "get_versions": self.rpc_get_versions,
+            "rollback": self.rpc_rollback,
         }
         handler = handlers.get(method)
         if handler is None:
