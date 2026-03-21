@@ -1,0 +1,12 @@
+{
+  "label_to_idx": {
+    "ace": 0,
+    "made": 1,
+    "fault": 2
+  },
+  "idx_to_label": {
+    "0": "ace",
+    "1": "made",
+    "2": "fault"
+  }
+}

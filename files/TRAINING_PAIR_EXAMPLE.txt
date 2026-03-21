@@ -1,0 +1,198 @@
+╔══════════════════════════════════════════════════════════════╗
+║   📸 WHAT THE NEW FEATURE LOOKS LIKE                         ║
+╚══════════════════════════════════════════════════════════════╝
+
+When you open the Training System, you'll see this new section:
+
+
+┌──────────────────────────────────────────────────────────────┐
+│ ### 📤 Upload Training Data                                  │
+│                                                              │
+│ ┌────────────────────────────────────────────────────────┐  │
+│ │ Videos                                                  │  │
+│ │ ┌──────────────────────────────────────────────────┐   │  │
+│ │ │ 📁 Click to upload or drag & drop                │   │  │
+│ │ │    (Accepts .mp4, .mov, .avi)                    │   │  │
+│ │ └──────────────────────────────────────────────────┘   │  │
+│ └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│ ┌────────────────────────────────────────────────────────┐  │
+│ │ CSV Labels                                              │  │
+│ │ ┌──────────────────────────────────────────────────┐   │  │
+│ │ │ 📁 Click to upload or drag & drop                │   │  │
+│ │ │    (Accepts .csv)                                │   │  │
+│ │ └──────────────────────────────────────────────────┘   │  │
+│ └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│ ─────────────────────────────────────────────────────────── │
+│ ### 🎯 Quick Add Training Pair                               │
+│ Upload a video + its corresponding CSV together to add to    │
+│ training data                                                │
+│                                                              │
+│ ┌────────────────────────────────────────────────────────┐  │
+│ │  ✅ Submit Video+CSV Pair for Training                  │  │
+│ └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│ Upload matching video and CSV files above, then click to    │
+│ submit                                                       │
+│                                                              │
+│ ─────────────────────────────────────────────────────────── │
+│                                                              │
+│ No files uploaded                                           │
+└──────────────────────────────────────────────────────────────┘
+
+
+╔══════════════════════════════════════════════════════════════╗
+║   📋 EXAMPLE USAGE STEP-BY-STEP                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+STEP 1: Upload Video
+--------------------
+Click "Videos" → Select "finals_match.mp4"
+
+  Videos: finals_match.mp4 (uploaded ✓)
+
+
+STEP 2: Upload CSV
+------------------
+Click "CSV Labels" → Select "finals_match.csv"
+
+  CSV Labels: finals_match.csv (uploaded ✓)
+
+
+STEP 3: Click Submit Button
+----------------------------
+Click "✅ Submit Video+CSV Pair for Training"
+
+
+STEP 4: See Success Message
+----------------------------
+The "pair_status" area will show:
+
+  ✅ Successfully saved 1 training pair(s)!
+
+  - finals_match: 182 tags
+
+  📁 Saved to: data/training_pairs
+
+  ✨ Next steps:
+  1. These pairs are now ready for training
+  2. Click '💾 Save as Dataset' to add to a dataset
+  3. Or click '⚡ Integrate & Train Immediately' to train right away
+
+  The model will learn what correct tags look like from this example
+
+
+╔══════════════════════════════════════════════════════════════╗
+║   🔄 WHAT HAPPENS BEHIND THE SCENES                          ║
+╚══════════════════════════════════════════════════════════════╝
+
+When you click "Submit Video+CSV Pair":
+
+1. System checks: Do video and CSV have matching names?
+   finals_match.mp4 ←→ finals_match.csv ✓
+
+2. Creates timestamped folder:
+   data/training_pairs/finals_match_20250111_143052/
+
+3. Copies files:
+   → finals_match.mp4 copied to folder
+   → finals_match.csv copied to folder
+
+4. Reads CSV and counts tags:
+   → Found 182 rows in CSV
+   → Each row = 1 tag/event
+
+5. Shows success message with info
+
+
+╔══════════════════════════════════════════════════════════════╗
+║   ❌ ERROR MESSAGES YOU MIGHT SEE                            ║
+╚══════════════════════════════════════════════════════════════╝
+
+Error 1: Missing Files
+----------------------
+❌ Error: Please upload both video and CSV files
+
+→ Solution: Upload BOTH files before clicking submit
+
+
+Error 2: Filename Mismatch
+--------------------------
+❌ Error: No matching video-CSV pairs found.
+
+Videos: match1, match2
+CSVs: game1, game2
+
+Files must have matching names (e.g., match1.mp4 + match1.csv)
+
+→ Solution: Rename files so they match:
+  match1.mp4 → match1.csv
+  match2.mp4 → match2.csv
+
+
+Error 3: File Save Error
+-------------------------
+❌ Error saving pair 'finals_match': [Permission denied]
+
+→ Solution: Check file permissions, make sure data/ folder is writable
+
+
+╔══════════════════════════════════════════════════════════════╗
+║   💡 PRO TIPS                                                ║
+╚══════════════════════════════════════════════════════════════╝
+
+TIP 1: Upload Multiple Pairs
+-----------------------------
+You can upload multiple videos and CSVs at once!
+
+Videos:
+  - match1.mp4
+  - match2.mp4
+  - match3.mp4
+
+CSVs:
+  - match1.csv
+  - match2.csv
+  - match3.csv
+
+Click submit → All 3 pairs saved!
+
+
+TIP 2: Consistent Naming
+------------------------
+Use a naming convention:
+
+  date_opponent_match.mp4
+  date_opponent_match.csv
+
+Example:
+  20250111_smith_singles.mp4
+  20250111_smith_singles.csv
+
+
+TIP 3: Quality Over Quantity
+-----------------------------
+Better to have:
+  ✓ 10 perfectly tagged matches
+Than:
+  ✗ 100 poorly tagged matches
+
+The model learns from your examples!
+
+
+TIP 4: Build a Library
+----------------------
+Keep submitting good examples over time:
+
+Week 1: 5 matches
+Week 2: 8 matches
+Week 3: 10 matches
+
+= 23 high-quality training examples!
+
+
+══════════════════════════════════════════════════════════════
+The new button is ready to use! Just launch the Training System
+and you'll see it right below the CSV upload area.
+══════════════════════════════════════════════════════════════

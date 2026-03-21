@@ -1,0 +1,98 @@
+╔══════════════════════════════════════════════════════════════╗
+║   🎾 TENNIS TAGGER - QUICK START GUIDE                       ║
+╚══════════════════════════════════════════════════════════════╝
+
+✅ FIXES APPLIED:
+-----------------
+1. Fixed Gradio compatibility issue (removed unsupported 'info' parameters)
+2. Added proper server readiness checking
+3. Enabled debug mode for better error visibility
+4. Created unified launcher (START_HERE.bat)
+5. Cleaned up redundant BAT files
+
+
+🚀 HOW TO START:
+----------------
+Simply double-click:
+
+   START_HERE.bat
+
+This unified launcher gives you options to:
+   [1] Launch Video Tagging System
+   [2] Launch Training System
+   [3] Diagnose PyWebView Issues
+   [4] Run Step-by-Step Tests
+   [5] Exit
+
+
+📋 BEFORE FIRST RUN:
+--------------------
+1. Make sure Python 3.11+ is installed
+2. Activate your virtual environment (done automatically by launcher)
+3. If PyWebView doesn't display a window:
+   - Choose option [3] from the launcher to diagnose
+   - You may need to install WebView2 Runtime:
+     https://go.microsoft.com/fwlink/p/?LinkId=2124703
+
+
+🔧 TROUBLESHOOTING:
+-------------------
+If you get errors:
+
+1. "Gradio compatibility error":
+   ✓ FIXED! The 'info' parameters have been removed
+
+2. "Window doesn't open":
+   - Run START_HERE.bat → Choose [3] to diagnose
+   - Install WebView2 Runtime if missing
+
+3. "Server failed to start":
+   - Check the terminal output for errors
+   - Make sure ports 7860 and 7861 are not in use
+   - Debug mode is now enabled, so you'll see detailed errors
+
+
+📁 FILES STRUCTURE:
+-------------------
+START_HERE.bat                    → Main launcher (USE THIS!)
+training_desktop.py               → Training system (updated)
+tagging_desktop.py                → Tagging system (updated)
+training_interface_production.py → Training UI (Gradio fixed)
+check_webview2.py                 → WebView2 diagnostic tool
+test_pywebview_backend.py         → PyWebView test tool
+build_exe.bat                     → Build standalone EXE (optional)
+
+
+🎯 WHAT'S NEW:
+--------------
+✓ All Gradio 'info' parameters removed (compatibility fix)
+✓ Smart server readiness checking (no more blind 5-second waits)
+✓ Debug mode enabled (shows helpful error messages)
+✓ Single unified launcher with menu
+✓ Integrated diagnostics
+✓ Terminal stays open for debugging
+✓ NEW: Quick Add Training Pairs feature (upload video+CSV together!)
+  → See NEW_FEATURE_TRAINING_PAIRS.txt for details
+
+
+💡 TIPS:
+--------
+- The terminal window shows debug info - don't close it!
+- If app crashes, errors will be visible in the terminal
+- Use option [4] for step-by-step testing if issues occur
+- Each app runs on a different port:
+  * Tagging: http://127.0.0.1:7860
+  * Training: http://127.0.0.1:7861
+
+
+📞 NEED HELP?
+-------------
+1. Run START_HERE.bat → Choose [3] for diagnostics
+2. Check terminal output for error messages
+3. Make sure WebView2 Runtime is installed
+4. Verify Python 3.11+ is installed
+
+
+══════════════════════════════════════════════════════════════
+Ready to go! Double-click START_HERE.bat to begin!
+══════════════════════════════════════════════════════════════

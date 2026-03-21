@@ -1,0 +1,124 @@
+# Tennis Tagger Configuration
+
+# Hardware Settings
+hardware:
+  use_gpu: true  # Set to false for CPU-only
+  gpu_id: 0  # GPU device ID
+  num_workers: 4  # Number of CPU workers for data loading
+  batch_size: 128  # Phase 1 optimization: Increased from 8 to 128 for better GPU utilization
+  auto_batch_size: true  # Automatically adjust batch size based on GPU memory
+
+# Video Processing
+video:
+  target_fps: 30  # Process at this FPS (downsample if needed)
+  frame_skip: 1  # Process every Nth frame (1 = all frames)
+  resize_height: 720  # Resize video height (maintains aspect ratio)
+  max_frames: null  # Maximum frames to process (null = all)
+
+# Detection Models
+detection:
+  player_detector:
+    model: "yolov8s.pt"  # yolov8n/s/m/l/x (n=fastest, x=most accurate) - CHANGED TO S FOR SPEED
+    confidence: 0.5
+    iou_threshold: 0.45
+    max_detections: 4  # Maximum players to detect
+
+  ball_detector:
+    model: "yolov8s.pt"  # CHANGED TO S FOR SPEED
+    confidence: 0.3  # Lower for small ball
+    iou_threshold: 0.3
+    max_detections: 1
+    
+  court_detector:
+    enabled: true
+    line_detection_threshold: 150
+    
+  pose_estimator:
+    enabled: true
+    model: "yolov8-pose"  # yolov8-pose (GPU, fast) or mediapipe (CPU, slower but more accurate)
+    confidence: 0.5
+
+# Tracking
+tracking:
+  method: "bytetrack"  # bytetrack, strongsort, botsort
+  max_age: 30  # Frames to keep lost tracks
+  min_hits: 3  # Minimum detections before track confirmed
+  iou_threshold: 0.3
+
+# Event Detection
+events:
+  serve_detection:
+    enabled: true
+    min_arm_angle: 120  # Degrees for serve motion
+    confidence_threshold: 0.7
+    
+  stroke_classification:
+    enabled: true
+    model: "models/stroke_classifier.pt"
+    classes: ["forehand", "backhand", "volley", "smash", "drop", "lob", "slice"]
+    confidence_threshold: 0.6
+    
+  rally_segmentation:
+    enabled: true
+    min_rally_length: 2  # Minimum strokes in a rally
+    max_gap_frames: 90  # Max frames between strokes (3 sec at 30fps)
+    
+  score_tracking:
+    enabled: true
+    auto_detect: true  # Try to detect from scoreboard
+    manual_input: false  # Require manual score input
+
+# Placement Analysis
+placement:
+  enabled: true
+  court_regions: 9  # Split court into NxN grid
+  depth_zones: 3  # Number of depth zones
+  use_ball_landing: true  # Estimate ball landing position
+
+# CSV Export
+csv:
+  format: "dartfish"  # dartfish or custom
+  include_timestamps: true
+  include_confidence: false  # Include confidence scores
+  decimal_places: 2
+
+# Training
+training:
+  learning_rate: 0.001
+  epochs: 50
+  batch_size: 16
+  validation_split: 0.2
+  augmentation: true
+  checkpoint_interval: 5  # Save every N epochs
+  early_stopping_patience: 10
+
+# QC Feedback
+qc:
+  auto_retrain: false  # Automatically retrain on corrections
+  min_corrections: 10  # Minimum corrections before retraining
+  keep_history: true  # Save QC history
+  confidence_adjustment: true  # Adjust thresholds based on feedback
+
+# Visualization
+visualization:
+  enabled: false  # Generate annotated video
+  show_detections: true
+  show_tracks: true
+  show_court: true
+  show_scores: true
+  fps: 30
+  codec: "mp4v"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  save_logs: true
+  log_file: "logs/tennis_tagger.log"
+
+# Paths (relative to project root)
+paths:
+  models_dir: "models"
+  data_dir: "data"
+  output_dir: "data/output"
+  cache_dir: "cache"
+  logs_dir: "logs"

@@ -1,0 +1,13 @@
+{
+  "task": "shot_placement",
+  "version": 1,
+  "parent_version": null,
+  "timestamp": "20260220_093011",
+  "training_mode": "finetune",
+  "metrics": {
+    "accuracy": 71.7948717948718,
+    "final_loss": 1.750592291355133,
+    "num_samples": 39,
+    "num_classes": 14
+  }
+}

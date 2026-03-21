@@ -1,0 +1,13 @@
+{
+  "task": "stroke_class",
+  "version": 2,
+  "parent_version": null,
+  "timestamp": "20260220_092958",
+  "training_mode": "finetune",
+  "metrics": {
+    "accuracy": 97.43589743589743,
+    "final_loss": 0.4305988699197769,
+    "num_samples": 39,
+    "num_classes": 5
+  }
+}

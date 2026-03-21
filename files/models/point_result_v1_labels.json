@@ -1,0 +1,10 @@
+{
+  "label_to_idx": {
+    "winner": 0,
+    "error": 1
+  },
+  "idx_to_label": {
+    "0": "winner",
+    "1": "error"
+  }
+}

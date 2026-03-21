@@ -2,18 +2,29 @@ package pipeline
 
 import (
 	"math"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/liamp/tennis-tagger/internal/bridge"
 	"github.com/liamp/tennis-tagger/internal/config"
 )
 
+func testVideoPath(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot determine test file path")
+	}
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "testdata", "sample_5s.mp4")
+}
+
 func TestProcessWithMockBridge(t *testing.T) {
 	cfg := config.Default()
 	mock := bridge.NewMockBridge()
 	p := New(mock, cfg)
 
-	result, err := p.Process("../../testdata/sample_5s.mp4")
+	result, err := p.Process(testVideoPath(t))
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}

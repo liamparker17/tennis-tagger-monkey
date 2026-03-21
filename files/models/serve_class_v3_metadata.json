@@ -1,0 +1,13 @@
+{
+  "task": "serve_class",
+  "version": 3,
+  "parent_version": null,
+  "timestamp": "20260220_093007",
+  "training_mode": "finetune",
+  "metrics": {
+    "accuracy": 100.0,
+    "final_loss": 0.018243573140352964,
+    "num_samples": 114,
+    "num_classes": 3
+  }
+}

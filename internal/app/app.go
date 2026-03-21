@@ -71,26 +71,23 @@ func (a *App) ExportCSV(outputPath string) error {
 func resultToRows(r *pipeline.Result) []export.ResultRow {
 	rows := make([]export.ResultRow, 0, len(r.Detections))
 	for _, det := range r.Detections {
-		fields := make([]string, 62) // DartfishColumns has 62 columns
+		fields := make([]string, len(export.DartfishColumns))
 
-		// Populate basic timing fields
-		timestamp := ""
+		// T1: Video Timestamp (column index 48)
 		if r.FPS > 0 {
 			seconds := float64(det.FrameIndex) / r.FPS
-			timestamp = export.FormatTimestamp(seconds)
+			fields[48] = export.FormatTimestamp(seconds)
 		}
-		fields[0] = timestamp // Time
-		fields[1] = fmt.Sprintf("%d", det.FrameIndex)
+		// T2: Frame Number (column index 49)
+		fields[49] = fmt.Sprintf("%d", det.FrameIndex)
 
-		// Player count
-		fields[2] = fmt.Sprintf("%d", len(det.Players))
-
-		// Ball detected
+		// U1: Confidence Score (column index 50)
 		if det.Ball != nil {
-			fields[3] = "true"
-		} else {
-			fields[3] = "false"
+			fields[50] = fmt.Sprintf("%.3f", det.Ball.Confidence)
 		}
+
+		// G2: Total Strokes — player count as placeholder
+		fields[23] = fmt.Sprintf("%d", len(det.Players))
 
 		rows = append(rows, export.ResultRow{Fields: fields})
 	}

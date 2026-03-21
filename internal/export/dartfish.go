@@ -59,9 +59,9 @@ func (e *DartfishExporter) ExportFile(rows []ResultRow, path string) error {
 	if err != nil {
 		return fmt.Errorf("creating file %s: %w", path, err)
 	}
-	defer f.Close()
 
 	if err := e.Export(rows, f); err != nil {
+		f.Close()
 		return err
 	}
 

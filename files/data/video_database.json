@@ -1,0 +1,31 @@
+{
+  "videos": {
+    "85778073b2e127bf": {
+      "path": "C:\\Users\\liamp\\Videos\\Andrew Johnson vs Alberto Pulido Moreno.mp4",
+      "name": "Andrew Johnson vs Alberto Pulido Moreno.mp4",
+      "fingerprint": "85778073b2e127bf",
+      "total_frames": 819750,
+      "processed_frames": 1064,
+      "output_csv": "data\\feature_extraction\\Andrew Johnson vs Alberto Pulido Moreno_features.csv",
+      "status": "failed",
+      "started_at": "2025-11-12T15:59:02.687430",
+      "updated_at": "2025-11-12T15:59:34.166777",
+      "percentage": 0.1,
+      "error": "RuntimeError: cannot schedule new futures after shutdown",
+      "failed_at": "2025-11-12T15:59:34.191298"
+    },
+    "67337ed79298984a": {
+      "path": "C:\\Users\\liamp\\Downloads\\Tennis Tagger Monkey\\files\\data\\training_pairs\\Andrew Johnson vs Alberto Pulido Moreno_20251112_155810\\Andrew Johnson vs Alberto Pulido Moreno.mp4",
+      "name": "Andrew Johnson vs Alberto Pulido Moreno.mp4",
+      "fingerprint": "67337ed79298984a",
+      "total_frames": 819750,
+      "processed_frames": 3576,
+      "output_csv": "data\\output\\Andrew Johnson vs Alberto Pulido Moreno.csv",
+      "status": "processing",
+      "started_at": "2026-02-20T21:11:14.571186",
+      "updated_at": "2026-02-20T21:12:12.168613",
+      "percentage": 0.4
+    }
+  },
+  "version": "1.0"
+}

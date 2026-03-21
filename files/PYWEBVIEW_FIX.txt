@@ -1,0 +1,122 @@
+============================================================
+  PYWEBVIEW DISPLAY ISSUE - FIXED!
+============================================================
+
+WHAT WAS FIXED:
+---------------
+1. Added proper server readiness checking (instead of blind 5-second wait)
+2. Enabled debug mode to show errors (was disabled)
+3. Added 'requests' library for HTTP checking
+4. Improved error handling and diagnostics
+
+COMMON CAUSES & SOLUTIONS:
+--------------------------
+
+Problem 1: WebView2 Runtime Missing
+------------------------------------
+SYMPTOMS: Window doesn't open, or opens blank/white
+SOLUTION: Install Microsoft Edge WebView2 Runtime
+
+Run this script:
+   python check_webview2.py
+
+Or download directly:
+   https://go.microsoft.com/fwlink/p/?LinkId=2124703
+
+
+Problem 2: Wrong PyWebView Backend
+-----------------------------------
+SYMPTOMS: Window opens but crashes or shows errors
+SOLUTION: Test which backend is being used
+
+Run this script:
+   python test_pywebview_backend.py
+
+
+Problem 3: Server Not Starting
+-------------------------------
+SYMPTOMS: Window opens to "Connection refused" or timeout
+SOLUTION: The updated scripts now check server readiness
+           and will show errors if the server fails to start
+
+
+QUICK START:
+------------
+1. Run the fix utility:
+      fix_pywebview.bat
+
+   This will:
+   - Check WebView2 installation
+   - Test PyWebView backend
+   - Help launch your app
+
+2. Or run your app directly:
+      python training_desktop.py
+   OR
+      python tagging_desktop.py
+
+
+MANUAL TESTING:
+---------------
+1. Check WebView2:
+      python check_webview2.py
+
+2. Test PyWebView:
+      python test_pywebview_backend.py
+
+3. Run your app:
+      python training_desktop.py
+
+
+STILL NOT WORKING?
+------------------
+If PyWebView still doesn't display the GUI:
+
+1. Make sure you installed WebView2 Runtime
+   (check_webview2.py will help)
+
+2. Try updating PyWebView:
+      pip install --upgrade pywebview
+
+3. Try installing with winforms:
+      pip install pywebview[winforms]
+
+4. Check the debug output when running your app
+   (debug mode is now enabled by default)
+
+5. Make sure port 7860/7861 is not blocked by firewall
+
+
+WHAT THE SCRIPTS DO:
+--------------------
+check_webview2.py
+   - Checks if WebView2 Runtime is installed
+   - Provides download link if missing
+
+test_pywebview_backend.py
+   - Tests which backend PyWebView will use
+   - Opens a test window to verify it works
+
+fix_pywebview.bat
+   - Runs all diagnostic steps
+   - Helps you launch your app
+
+training_desktop.py (UPDATED)
+   - Now properly waits for server to be ready
+   - Shows debug output
+   - Better error handling
+
+tagging_desktop.py (UPDATED)
+   - Now properly waits for server to be ready
+   - Shows debug output
+   - Better error handling
+
+
+NEXT STEPS:
+-----------
+1. Run: fix_pywebview.bat
+2. Follow the prompts
+3. If WebView2 is missing, install it
+4. Try launching your app again
+
+============================================================

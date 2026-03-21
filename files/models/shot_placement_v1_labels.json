@@ -1,0 +1,34 @@
+{
+  "label_to_idx": {
+    "crosscourt_deep": 0,
+    "crosscourt_long": 1,
+    "crosscourt_short": 2,
+    "down_line_deep": 3,
+    "down_line_long": 4,
+    "down_line_net": 5,
+    "down_line_short": 6,
+    "down_line_wide": 7,
+    "inside_in_net": 8,
+    "inside_out_short": 9,
+    "inside_out_wide": 10,
+    "middle_long": 11,
+    "middle_net": 12,
+    "middle_short": 13
+  },
+  "idx_to_label": {
+    "0": "crosscourt_deep",
+    "1": "crosscourt_long",
+    "2": "crosscourt_short",
+    "3": "down_line_deep",
+    "4": "down_line_long",
+    "5": "down_line_net",
+    "6": "down_line_short",
+    "7": "down_line_wide",
+    "8": "inside_in_net",
+    "9": "inside_out_short",
+    "10": "inside_out_wide",
+    "11": "middle_long",
+    "12": "middle_net",
+    "13": "middle_short"
+  }
+}

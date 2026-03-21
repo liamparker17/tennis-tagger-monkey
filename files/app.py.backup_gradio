@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""
+Tennis Tagger GUI
+
+Interactive web interface for tennis match tagging using Gradio.
+
+Usage:
+    python gui/app.py
+"""
+
+import sys
+from pathlib import Path
+import gradio as gr
+import pandas as pd
+
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from main import TennisTagger
+
+
+class TennisGUI:
+    """
+    Gradio-based GUI for tennis tagging.
+    """
+    
+    def __init__(self):
+        """Initialize GUI."""
+        self.tagger = None
+        self.current_csv = None
+    
+    def initialize_tagger(self, device: str = "auto") -> str:
+        """
+        Initialize the tennis tagger.
+        
+        Args:
+            device: Device selection
+        
+        Returns:
+            Status message
+        """
+        try:
+            self.tagger = TennisTagger(device=device)
+            return "✅ Tagger initialized successfully!"
+        except Exception as e:
+            return f"❌ Error initializing tagger: {e}"
+    
+    def process_video(
+        self,
+        video_file,
+        device: str,
+        progress=gr.Progress()
+    ):
+        """
+        Process uploaded video.
+        
+        Args:
+            video_file: Uploaded video file
+            device: Device selection
+            progress: Gradio progress tracker
+        
+        Returns:
+            Tuple of (status, csv_dataframe, download_file)
+        """
+        if video_file is None:
+            return "❌ Please upload a video file", None, None
+        
+        # Initialize tagger if needed
+        if self.tagger is None:
+            progress(0.1, "Initializing tagger...")
+            init_status = self.initialize_tagger(device)
+            if "Error" in init_status:
+                return init_status, None, None
+        
+        # Process video
+        try:
+            video_path = video_file.name
+            output_path = video_path.replace('.mp4', '_tags.csv')
+            
+            progress(0.2, "Loading video...")
+            
+            # Process
+            stats = self.tagger.process_video(
+                video_path=video_path,
+                output_path=output_path
+            )
+            
+            progress(1.0, "Complete!")
+            
+            # Load CSV for display
+            self.current_csv = pd.read_csv(output_path)
+            
+            # Status message
+            status = f"""
+✅ Processing Complete!
+
+📊 Statistics:
+- Video Duration: {stats['video_duration']:.1f}s
+- Processing Time: {stats['processing_time']:.1f}s
+- Speed Factor: {stats['speed_factor']:.1f}x real-time
+- Serves: {stats['serves']}
+- Points: {stats['points']}
+- Total Strokes: {stats['strokes']}
+            """
+            
+            return status, self.current_csv, output_path
+            
+        except Exception as e:
+            return f"❌ Error processing video: {e}", None, None
+    
+    def apply_qc_feedback(
+        self,
+        original_video,
+        corrected_csv_file,
+        update_model: bool
+    ):
+        """
+        Apply QC feedback from corrected CSV.
+        
+        Args:
+            original_video: Original video file
+            corrected_csv_file: Corrected CSV file
+            update_model: Whether to update models
+        
+        Returns:
+            Status message
+        """
+        if original_video is None or corrected_csv_file is None:
+            return "❌ Please provide both video and corrected CSV"
+        
+        try:
+            video_path = original_video.name
+            qc_csv_path = corrected_csv_file.name
+            output_path = video_path.replace('.mp4', '_updated_tags.csv')
+            
+            # Process with QC feedback
+            self.tagger.process_video(
+                video_path=video_path,
+                output_path=output_path,
+                qc_csv_path=qc_csv_path,
+                update_model=update_model
+            )
+            
+            status = "✅ QC feedback applied successfully!"
+            if update_model:
+                status += "\n🔧 Models updated with corrections."
+            
+            return status
+            
+        except Exception as e:
+            return f"❌ Error applying QC feedback: {e}"
+    
+    def create_interface(self):
+        """
+        Create Gradio interface.
+        
+        Returns:
+            Gradio Blocks interface
+        """
+        with gr.Blocks(title="Tennis Match Tagger") as interface:
+            gr.Markdown("""
+# 🎾 Tennis Match Tagging System
+
+Upload a tennis match video to automatically tag serves, strokes, placements, and scores.
+Generate Dartfish-compatible CSV outputs.
+            """)
+            
+            with gr.Tab("Tag Video"):
+                with gr.Row():
+                    with gr.Column():
+                        video_input = gr.Video(
+                            label="Upload Tennis Match Video"
+                        )
+                        
+                        device_choice = gr.Radio(
+                            choices=["auto", "cuda", "cpu"],
+                            value="auto",
+                            label="Processing Device"
+                        )
+                        
+                        process_btn = gr.Button(
+                            "🎬 Process Video",
+                            variant="primary"
+                        )
+                    
+                    with gr.Column():
+                        status_output = gr.Textbox(
+                            label="Status",
+                            lines=10
+                        )
+                
+                with gr.Row():
+                    csv_output = gr.Dataframe(
+                        label="Generated Tags (Preview)",
+                        max_rows=20
+                    )
+                
+                with gr.Row():
+                    download_btn = gr.File(
+                        label="Download CSV"
+                    )
+                
+                process_btn.click(
+                    fn=self.process_video,
+                    inputs=[video_input, device_choice],
+                    outputs=[status_output, csv_output, download_btn]
+                )
+            
+            with gr.Tab("QC Feedback"):
+                gr.Markdown("""
+### Apply Quality Control Feedback
+
+1. Download the generated CSV
+2. Review and correct tags in spreadsheet software
+3. Upload corrected CSV here to improve future predictions
+                """)
+                
+                with gr.Row():
+                    with gr.Column():
+                        qc_video_input = gr.Video(
+                            label="Original Video"
+                        )
+                        
+                        qc_csv_input = gr.File(
+                            label="Corrected CSV"
+                        )
+                        
+                        update_model_check = gr.Checkbox(
+                            label="Update models with corrections",
+                            value=True
+                        )
+                        
+                        apply_qc_btn = gr.Button(
+                            "🔄 Apply QC Feedback",
+                            variant="primary"
+                        )
+                    
+                    with gr.Column():
+                        qc_status_output = gr.Textbox(
+                            label="Status",
+                            lines=10
+                        )
+                
+                apply_qc_btn.click(
+                    fn=self.apply_qc_feedback,
+                    inputs=[
+                        qc_video_input,
+                        qc_csv_input,
+                        update_model_check
+                    ],
+                    outputs=qc_status_output
+                )
+            
+            with gr.Tab("About"):
+                gr.Markdown("""
+### Tennis Match Tagging System
+
+**Features:**
+- 🎯 Automatic player and ball detection
+- 🎾 Stroke classification (8 types)
+- 📍 Shot placement analysis
+- 📊 Score tracking
+- 📝 Dartfish-compatible CSV export
+- 🔄 QC feedback loop for continuous improvement
+
+**Hardware:**
+- CPU: Works on any modern CPU
+- GPU: Recommended - NVIDIA RTX 3050 or better
+- RAM: 16GB minimum, 32GB recommended
+
+**Performance:**
+- ~2-4x real-time on RTX 3050
+- ~0.5x real-time on CPU only
+
+**Support:**
+- Check the README for detailed documentation
+- Enable debug mode in settings for troubleshooting
+                """)
+        
+        return interface
+
+
+def main():
+    """Launch the GUI."""
+    gui = TennisGUI()
+    interface = gui.create_interface()
+    
+    # Launch
+    interface.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False
+    )
+
+
+if __name__ == "__main__":
+    main()

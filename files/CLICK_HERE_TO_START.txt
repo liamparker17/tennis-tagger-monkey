@@ -1,0 +1,51 @@
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║   🎾 TENNIS TAGGER - QUICK START                            ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+
+📌 TO START BOTH APPS:
+
+   👉 Double-click:  START_HERE.bat
+
+
+⏱️ WHAT HAPPENS:
+
+   1. Two terminal windows appear (don't close them!)
+   2. They show "Starting server..." messages
+   3. Wait 10-15 seconds
+   4. Two desktop windows pop up:
+      - Training System v3.1
+      - Video Tagging System
+   5. Done!
+
+
+✅ TIPS:
+
+   • Be patient - first startup takes 10-20 seconds
+   • Terminal windows show server logs (keep them open)
+   • Desktop windows = the actual apps
+   • Close desktop windows to stop apps
+
+
+🐛 IF NOTHING HAPPENS:
+
+   • Look at terminal windows for errors
+   • Check Python installed: python --version
+   • Try running START_HERE.bat directly (not double-clicking)
+   • Wait longer (can take 20+ seconds first time)
+
+
+📁 OTHER FILES:
+
+   start_training_desktop.bat → Training only
+   start_tagging_desktop.bat → Tagging only
+   build_exe.bat → Build standalone EXE files
+
+
+═══════════════════════════════════════════════════════════════
+
+Ready? Double-click START_HERE.bat now!
+
+═══════════════════════════════════════════════════════════════

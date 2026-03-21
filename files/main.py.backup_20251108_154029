@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""
+Tennis Match Auto-Tagging System
+Main entry point for processing tennis videos
+"""
+
+import argparse
+import sys
+import os
+from pathlib import Path
+import yaml
+import logging
+from typing import Optional
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+from video_processor import VideoProcessor
+
+# Detection modules
+from detection.player_detector import PlayerDetector
+from detection.ball_detector import BallDetector
+from detection.court_detector import CourtDetector
+from detection.serve_detector import ServeDetector
+from detection.event_detector import EventDetector
+from detection.pose_estimator import PoseEstimator
+from detection.tracker import MultiObjectTracker as ObjectTracker
+
+# Analysis / tagging modules
+from analysis.csv_generator import CSVGenerator
+from analysis.comparator import TagComparator  # or Comparator, match class name in comparator.py
+from analysis.qc_feedback import FeedbackLoop
+from analysis.rally_analyzer import RallyAnalyzer
+from analysis.score_tracker import ScoreTracker
+from analysis.placement_analyzer import PlacementAnalyzer
+from analysis.stroke_classifier import StrokeClassifier
+
+
+
+def setup_logging(config: dict) -> logging.Logger:
+    """Setup logging configuration"""
+    log_config = config.get('logging', {})
+    level = getattr(logging, log_config.get('level', 'INFO'))
+    
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_config.get('log_file', 'tennis_tagger.log'))
+        ] if log_config.get('save_logs', True) else [logging.StreamHandler()]
+    )
+    
+    return logging.getLogger('TennisTagger')
+
+
+def load_config(config_path: str) -> dict:
+    """Load configuration from YAML file"""
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+
+class TennisTagger:
+    """Main tennis tagging pipeline"""
+    
+    def __init__(self, config: dict, logger: logging.Logger):
+        self.config = config
+        self.logger = logger
+        
+        # Initialize components
+        self.logger.info("Initializing detection models...")
+        self.video_processor = VideoProcessor(config)
+        self.player_detector = PlayerDetector(config)
+        self.ball_detector = BallDetector(config)
+        self.court_detector = CourtDetector(config)
+        self.pose_estimator = PoseEstimator(config)
+        
+        self.logger.info("Initializing analysis modules...")
+        self.serve_detector = ServeDetector(config)
+        self.stroke_classifier = StrokeClassifier(config)
+        self.rally_analyzer = RallyAnalyzer(config)
+        self.score_tracker = ScoreTracker(config)
+        self.placement_analyzer = PlacementAnalyzer(config)
+        
+        self.csv_generator = CSVGenerator(config)
+        
+        self.logger.info("Initialization complete")
+    
+    def process_video(self, video_path: str, output_csv: str, 
+                     visualize: bool = False) -> dict:
+        """
+        Process a tennis match video and generate tagged CSV
+        
+        Args:
+            video_path: Path to input video file
+            output_csv: Path to output CSV file
+            visualize: Whether to generate annotated video
+            
+        Returns:
+            Dictionary with processing statistics and results
+        """
+        self.logger.info(f"Processing video: {video_path}")
+        
+        # Load video
+        frames, metadata = self.video_processor.load_video(video_path)
+        self.logger.info(f"Loaded {len(frames)} frames from video")
+        
+        # Initialize result containers
+        all_detections = []
+        all_tracks = []
+        all_poses = []
+        court_lines = None
+        
+        # Process frames
+        self.logger.info("Detecting players and ball...")
+        for frame_idx, frame in enumerate(frames):
+            if frame_idx % 100 == 0:
+                self.logger.info(f"Processing frame {frame_idx}/{len(frames)}")
+            
+            # Detect court (once or periodically)
+            if court_lines is None or frame_idx % 300 == 0:
+                court_lines = self.court_detector.detect(frame)
+            
+            # Detect players and ball
+            player_detections = self.player_detector.detect(frame)
+            ball_detections = self.ball_detector.detect(frame)
+            
+            # Track objects
+            player_tracks = self.player_detector.track(player_detections)
+            ball_tracks = self.ball_detector.track(ball_detections)
+            
+            # Estimate poses
+            poses = self.pose_estimator.estimate(frame, player_detections)
+            
+            all_detections.append({
+                'frame_idx': frame_idx,
+                'players': player_detections,
+                'ball': ball_detections,
+                'court': court_lines
+            })
+            all_tracks.append({
+                'frame_idx': frame_idx,
+                'player_tracks': player_tracks,
+                'ball_tracks': ball_tracks
+            })
+            all_poses.append({
+                'frame_idx': frame_idx,
+                'poses': poses
+            })
+        
+        self.logger.info("Detection complete. Analyzing events...")
+        
+        # Analyze events
+        serves = self.serve_detector.detect(all_poses, all_tracks)
+        strokes = self.stroke_classifier.classify(all_poses, all_tracks, frames)
+        rallies = self.rally_analyzer.segment(strokes, all_tracks)
+        scores = self.score_tracker.track(rallies, serves)
+        placements = self.placement_analyzer.analyze(
+            all_tracks, court_lines, strokes
+        )
+        
+        self.logger.info(f"Found {len(serves)} serves, {len(strokes)} strokes, "
+                        f"{len(rallies)} rallies")
+        
+        # Generate CSV
+        self.logger.info("Generating CSV output...")
+        csv_data = self.csv_generator.generate(
+            metadata=metadata,
+            serves=serves,
+            strokes=strokes,
+            rallies=rallies,
+            scores=scores,
+            placements=placements
+        )
+        
+        # Save CSV
+        csv_data.to_csv(output_csv, index=False)
+        self.logger.info(f"CSV saved to: {output_csv}")
+        
+        # Generate visualization if requested
+        if visualize:
+            viz_path = output_csv.replace('.csv', '_annotated.mp4')
+            self.logger.info(f"Generating annotated video: {viz_path}")
+            self.video_processor.generate_visualization(
+                frames, all_detections, all_tracks, strokes, viz_path
+            )
+        
+        # Return statistics
+        stats = {
+            'video_path': video_path,
+            'frames_processed': len(frames),
+            'duration_seconds': metadata['duration'],
+            'num_serves': len(serves),
+            'num_strokes': len(strokes),
+            'num_rallies': len(rallies),
+            'output_csv': output_csv
+        }
+        
+        return stats
+
+
+def main():
+    """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description='Tennis Match Auto-Tagging System',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  # Basic usage
+  python main.py --video match.mp4 --output results.csv
+  
+  # With GPU and visualization
+  python main.py --video match.mp4 --output results.csv --gpu --visualize
+  
+  # Custom config
+  python main.py --video match.mp4 --output results.csv --config my_config.yaml
+        '''
+    )
+    
+    parser.add_argument('--video', type=str, required=True,
+                       help='Path to input video file')
+    parser.add_argument('--output', type=str, required=True,
+                       help='Path to output CSV file')
+    parser.add_argument('--config', type=str, default='config/config.yaml',
+                       help='Path to configuration file')
+    parser.add_argument('--gpu', action='store_true',
+                       help='Use GPU acceleration')
+    parser.add_argument('--visualize', action='store_true',
+                       help='Generate annotated video')
+    parser.add_argument('--confidence', type=float,
+                       help='Override detection confidence threshold')
+    parser.add_argument('--model_path', type=str,
+                       help='Path to custom trained model')
+    
+    args = parser.parse_args()
+    
+    # Check if video exists
+    if not os.path.exists(args.video):
+        print(f"Error: Video file not found: {args.video}")
+        sys.exit(1)
+    
+    # Load configuration
+    if not os.path.exists(args.config):
+        print(f"Error: Config file not found: {args.config}")
+        sys.exit(1)
+    
+    config = load_config(args.config)
+    
+    # Override config with command line args
+    if args.gpu:
+        config['hardware']['use_gpu'] = True
+    if args.confidence:
+        config['detection']['player_detector']['confidence'] = args.confidence
+        config['detection']['ball_detector']['confidence'] = args.confidence
+    if args.model_path:
+        config['events']['stroke_classification']['model'] = args.model_path
+    
+    # Setup logging
+    logger = setup_logging(config)
+    logger.info("=" * 60)
+    logger.info("Tennis Match Auto-Tagging System")
+    logger.info("=" * 60)
+    
+    try:
+        # Initialize tagger
+        tagger = TennisTagger(config, logger)
+        
+        # Process video
+        stats = tagger.process_video(
+            args.video,
+            args.output,
+            visualize=args.visualize
+        )
+        
+        # Print summary
+        logger.info("=" * 60)
+        logger.info("Processing Complete!")
+        logger.info("=" * 60)
+        logger.info(f"Processed: {stats['frames_processed']} frames "
+                   f"({stats['duration_seconds']:.1f} seconds)")
+        logger.info(f"Detected: {stats['num_serves']} serves, "
+                   f"{stats['num_strokes']} strokes, "
+                   f"{stats['num_rallies']} rallies")
+        logger.info(f"Output saved to: {stats['output_csv']}")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"Error processing video: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

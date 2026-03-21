@@ -1,0 +1,162 @@
+╔══════════════════════════════════════════════════════════════╗
+║   🎯 NEW FEATURE: Quick Add Training Pairs                   ║
+╚══════════════════════════════════════════════════════════════╝
+
+✅ WHAT'S NEW:
+--------------
+You can now upload a video + its corresponding CSV together and submit
+them as a training pair! This teaches the model what correct tags look like.
+
+
+📍 WHERE TO FIND IT:
+--------------------
+1. Launch Training System (START_HERE.bat → Option 2)
+2. Go to the "⚡ Training" tab
+3. Look for the section:
+
+   🎯 Quick Add Training Pair
+   Upload a video + its corresponding CSV together to add to training data
+
+   [✅ Submit Video+CSV Pair for Training]
+
+
+🎬 HOW TO USE:
+--------------
+1. **Upload Video**: Click "Videos" and select your video file
+   Example: match1.mp4
+
+2. **Upload CSV**: Click "CSV Labels" and upload the correct tags
+   Example: match1.csv (must have same filename!)
+
+3. **Submit Pair**: Click "✅ Submit Video+CSV Pair for Training"
+
+4. **Success**: You'll see:
+   ✅ Successfully saved 1 training pair(s)!
+   - match1: 245 tags
+
+   📁 Saved to: data/training_pairs
+
+
+⚠️ IMPORTANT REQUIREMENTS:
+---------------------------
+✓ Video and CSV must have MATCHING FILENAMES
+  ✓ Correct: match1.mp4 + match1.csv
+  ✗ Wrong:   match1.mp4 + game1.csv
+
+✓ CSV must contain correct/accurate tags for that video
+  - This is what the model will learn from!
+  - If your tags are wrong, the model will learn wrong patterns
+
+✓ You can upload multiple video+CSV pairs at once
+
+
+💡 WHAT HAPPENS WHEN YOU SUBMIT:
+---------------------------------
+1. System matches video and CSV by filename
+2. Creates a timestamped folder in data/training_pairs/
+3. Copies both files to the folder
+4. Counts the number of tags in the CSV
+5. Shows success message with next steps
+
+
+🚀 NEXT STEPS AFTER SUBMITTING:
+--------------------------------
+After submitting your video+CSV pair, you can:
+
+Option 1: Save as Dataset
+   - Click "💾 Save as Dataset"
+   - Give it a name (e.g., "CorrectTags_Jan2025")
+   - Use later for batch training
+
+Option 2: Integrate & Train Immediately
+   - Click "⚡ Integrate & Train Immediately"
+   - System will start training right away
+   - Model learns from your correct examples!
+
+Option 3: Add More Pairs
+   - Upload more video+CSV pairs
+   - Build up a collection
+   - Train on all of them together
+
+
+📊 EXAMPLE WORKFLOW:
+--------------------
+Day 1:
+  - Upload match1.mp4 + match1.csv → Submit
+  - Upload match2.mp4 + match2.csv → Submit
+  - Upload match3.mp4 + match3.csv → Submit
+
+Day 2:
+  - Click "⚡ Integrate & Train Immediately"
+  - Model learns from all 3 correctly-tagged matches
+  - Future auto-tagging becomes more accurate!
+
+
+🎓 WHY THIS HELPS:
+------------------
+The model learns by example. When you provide:
+  ✓ Video showing what happened
+  ✓ CSV with correct tags for what happened
+
+The model learns:
+  - "When video looks like THIS..."
+  - "...the tags should be THAT"
+  - Improves accuracy on similar matches in future
+
+
+💾 WHERE FILES ARE SAVED:
+--------------------------
+Location: data/training_pairs/
+
+Structure:
+  data/training_pairs/
+    match1_20250111_143052/
+      match1.mp4
+      match1.csv
+    match2_20250111_143124/
+      match2.mp4
+      match2.csv
+
+
+🔧 TROUBLESHOOTING:
+-------------------
+❌ "No matching video-CSV pairs found"
+   → Make sure filenames match (without extension)
+   → match1.mp4 needs match1.csv
+
+❌ "Please upload both video and CSV files"
+   → You need to upload BOTH before clicking submit
+
+❌ Error reading CSV
+   → Make sure CSV is in correct format
+   → Check for special characters or encoding issues
+
+
+📝 CSV FORMAT REMINDER:
+-----------------------
+Your CSV should have columns like:
+  - Time/Timestamp
+  - Player
+  - Stroke Type
+  - Serve Type
+  - Placement
+  - Score
+  etc.
+
+(Whatever format your system expects for tags)
+
+
+✨ BENEFITS:
+------------
+✓ Quick way to add training examples
+✓ No need to process videos first
+✓ Direct upload of pre-tagged data
+✓ Model learns from your corrections
+✓ Improves future auto-tagging accuracy
+✓ Build library of correct examples
+
+
+══════════════════════════════════════════════════════════════
+Ready to try it! Launch the Training System and look for the
+"🎯 Quick Add Training Pair" section!
+══════════════════════════════════════════════════════════════

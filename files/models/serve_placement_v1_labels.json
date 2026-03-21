@@ -1,0 +1,18 @@
+{
+  "label_to_idx": {
+    "wide": 0,
+    "body": 1,
+    "fault_wide": 2,
+    "t": 3,
+    "fault_long": 4,
+    "fault_net": 5
+  },
+  "idx_to_label": {
+    "0": "wide",
+    "1": "body",
+    "2": "fault_wide",
+    "3": "t",
+    "4": "fault_long",
+    "5": "fault_net"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "video_path": "C:\\Users\\liamp\\Downloads\\Tennis Tagger Monkey\\files\\data\\training_pairs\\Andrew Johnson vs Alberto Pulido Moreno_20251112_155810\\Andrew Johnson vs Alberto Pulido Moreno.mp4",
+  "last_frame_idx": 4999,
+  "output_csv": "data\\output\\Andrew Johnson vs Alberto Pulido Moreno.csv",
+  "timestamp": "2026-02-20T21:12:03.687495",
+  "num_detections": 5000,
+  "num_tracks": 5000,
+  "num_poses": 5000
+}

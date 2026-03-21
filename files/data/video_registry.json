@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "videos": {
+    "Andrew_Johnson_vs_Alberto_Pulido_Moreno": {
+      "path": "C:\\Users\\liamp\\Downloads\\Tennis Tagger Monkey\\files\\data\\training_pairs\\Andrew Johnson vs Alberto Pulido Moreno_20251112_155810\\Andrew Johnson vs Alberto Pulido Moreno.mp4",
+      "name": "Andrew Johnson vs Alberto Pulido Moreno.mp4",
+      "hash": "f72be07f4df66a409fd74bc41d536631534236b13c2550ddc096bc6d3d405a30",
+      "fvd_path": null,
+      "csv_path": null,
+      "status": "processing",
+      "used_for_training": false,
+      "added_at": "2026-02-20T09:54:29.215961",
+      "processed_at": null,
+      "file_size": 4198362937,
+      "duration_seconds": 27325.0,
+      "fps": 30,
+      "total_frames": 819750,
+      "processing_started_at": "2026-02-20T21:11:14.572186"
+    }
+  }
+}

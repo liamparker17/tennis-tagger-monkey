@@ -27,6 +27,7 @@ class ScoreTracker:
                     ``gpu`` flag (``True`` when ``device != "cpu"``).
         """
         self._reader: Optional[object] = None
+        self._init_attempted: bool = False
         self._gpu = device != "cpu"
 
     # ------------------------------------------------------------------
@@ -46,7 +47,7 @@ class ScoreTracker:
             ``{"raw_text": str, "numbers": list[int]}`` when any text
             is detected, otherwise ``None``.
         """
-        if self._reader is None:
+        if self._reader is None and not self._init_attempted:
             self._init_reader()
 
         h, w = frame.shape[:2]
@@ -80,6 +81,7 @@ class ScoreTracker:
     # ------------------------------------------------------------------
 
     def _init_reader(self) -> None:
+        self._init_attempted = True
         try:
             import easyocr
 
@@ -87,8 +89,5 @@ class ScoreTracker:
             logger.info("EasyOCR reader initialised (gpu=%s)", self._gpu)
         except ImportError:
             logger.error("easyocr is not installed — score tracking disabled")
-            # Set a sentinel so we don't retry
-            self._reader = None
         except Exception:
             logger.exception("Failed to initialise EasyOCR")
-            self._reader = None
