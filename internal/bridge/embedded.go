@@ -1,4 +1,4 @@
-//go:build cgo && python3
+//go:build ignore
 
 package bridge
 
@@ -22,7 +22,7 @@ func (e *embeddedCaller) init(config BridgeConfig) error {
 func (e *embeddedCaller) close() {}
 
 // EmbeddedBridge implements BridgeBackend using an in-process CPython interpreter.
-// This build variant is selected when both cgo and the python3 build tag are enabled.
+// This file is parked with //go:build ignore until the embedded approach is needed.
 type EmbeddedBridge struct {
 	worker *Worker
 }
