@@ -1,12 +1,26 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "models": {
-    "detector": {
+    "detector_yolo": {
+      "file": "yolo11x.pt",
+      "size": 110000000,
+      "sha256": "",
+      "required": false,
+      "description": "YOLOv11x detector"
+    },
+    "detector_rtdetr": {
+      "file": "rtdetr-l.pt",
+      "size": 65000000,
+      "sha256": "",
+      "required": false,
+      "description": "RT-DETR-L detector"
+    },
+    "detector_yolov8": {
       "file": "yolov8x.pt",
       "size": 136000000,
       "sha256": "",
       "required": true,
-      "description": "YOLOv8x player + ball detector"
+      "description": "YOLOv8x detector (legacy)"
     },
     "stroke": {
       "file": "stroke_x3d.pt",
@@ -14,6 +28,13 @@
       "sha256": "",
       "required": true,
       "description": "3D CNN stroke classifier"
+    },
+    "stroke_swin": {
+      "file": "stroke_swin.pt",
+      "size": 50000000,
+      "sha256": "",
+      "required": false,
+      "description": "Video Swin stroke classifier"
     },
     "pose": {
       "file": "yolov8n-pose.pt",

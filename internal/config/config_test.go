@@ -112,6 +112,16 @@ training:
 	}
 }
 
+func TestLoadConfig_MLDefaults(t *testing.T) {
+	cfg, _ := Load("")
+	if cfg.Pipeline.DetectorBackend != "yolo" {
+		t.Errorf("expected 'yolo', got %s", cfg.Pipeline.DetectorBackend)
+	}
+	if cfg.Pipeline.ClassifierModel != "3dcnn" {
+		t.Errorf("expected '3dcnn', got %s", cfg.Pipeline.ClassifierModel)
+	}
+}
+
 func TestSaveConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

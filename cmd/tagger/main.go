@@ -31,8 +31,10 @@ func main() {
 	} else {
 		pb := bridge.NewProcessBridge(*pythonPath)
 		err := pb.Init(bridge.BridgeConfig{
-			ModelsDir: cfg.ModelsDir,
-			Device:    cfg.Device,
+			ModelsDir:       cfg.ModelsDir,
+			Device:          cfg.Device,
+			DetectorBackend: cfg.Pipeline.DetectorBackend,
+			ClassifierModel: cfg.Pipeline.ClassifierModel,
 		})
 		if err != nil {
 			slog.Warn("ProcessBridge init failed, falling back to MockBridge", "error", err)

@@ -19,11 +19,13 @@ type Config struct {
 
 // PipelineConfig holds pipeline-specific settings.
 type PipelineConfig struct {
-	BatchSize       int  `yaml:"batchSize"`
-	FrameSkip       int  `yaml:"frameSkip"`
-	EnablePose      bool `yaml:"enablePose"`
-	EnableScore     bool `yaml:"enableScore"`
-	CheckpointEvery int  `yaml:"checkpointEvery"`
+	BatchSize       int    `yaml:"batchSize"`
+	FrameSkip       int    `yaml:"frameSkip"`
+	EnablePose      bool   `yaml:"enablePose"`
+	EnableScore     bool   `yaml:"enableScore"`
+	CheckpointEvery int    `yaml:"checkpointEvery"`
+	DetectorBackend string `yaml:"detectorBackend"`
+	ClassifierModel string `yaml:"classifierModel"`
 }
 
 // ExportConfig holds export format settings.
@@ -50,6 +52,8 @@ func Default() *Config {
 			EnablePose:      true,
 			EnableScore:     false,
 			CheckpointEvery: 1000,
+			DetectorBackend: "yolo",
+			ClassifierModel: "3dcnn",
 		},
 		Export: ExportConfig{
 			Format: "dartfish",

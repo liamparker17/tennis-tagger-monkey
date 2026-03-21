@@ -91,8 +91,10 @@ type RallyResult struct {
 
 // BridgeConfig holds configuration for initializing a bridge backend.
 type BridgeConfig struct {
-	ModelsDir string `json:"modelsDir"`
-	Device    string `json:"device"`
+	ModelsDir       string `json:"ModelsDir"`
+	Device          string `json:"Device"`
+	DetectorBackend string `json:"DetectorBackend"`
+	ClassifierModel string `json:"ClassifierModel"`
 }
 
 // TrainingPair represents a video-CSV pair for training.
