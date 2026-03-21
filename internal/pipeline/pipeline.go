@@ -56,7 +56,13 @@ func (p *Pipeline) Progress() ProgressInfo {
 }
 
 // Process runs the full analysis pipeline on the video at videoPath.
+// It delegates to ProcessConcurrent for improved throughput.
 func (p *Pipeline) Process(videoPath string) (*Result, error) {
+	return p.ProcessConcurrent(videoPath)
+}
+
+// processSequential is the original sequential implementation, kept as a fallback.
+func (p *Pipeline) processSequential(videoPath string) (*Result, error) {
 	// 1. Open video
 	p.progress = ProgressInfo{Stage: "opening"}
 	vr, err := video.Open(videoPath)
