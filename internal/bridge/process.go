@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -184,8 +185,10 @@ func (p *processCaller) close() {
 }
 
 // ProcessBridge implements BridgeBackend by communicating with a Python subprocess.
+// Frame data is transferred via shared memory files (no base64 serialization).
 type ProcessBridge struct {
 	worker *Worker
+	shm    *SharedMemBuffer
 }
 
 // Compile-time interface check.
@@ -211,19 +214,27 @@ func (b *ProcessBridge) Init(config BridgeConfig) error {
 }
 
 // DetectBatch runs object detection on a batch of frames.
+// Uses shared memory file for frame data transfer (no base64 serialization).
 func (b *ProcessBridge) DetectBatch(frames []Frame) ([]DetectionResult, error) {
-	// Encode frames as base64 for transmission
-	frameData := make([]map[string]interface{}, len(frames))
-	for i, f := range frames {
-		frameData[i] = map[string]interface{}{
-			"width":       f.Width,
-			"height":      f.Height,
-			"data_base64": base64.StdEncoding.EncodeToString(f.Data),
+	// Lazy init shared memory buffer
+	if b.shm == nil {
+		var err error
+		b.shm, err = NewSharedMemBuffer(os.TempDir())
+		if err != nil {
+			return nil, fmt.Errorf("DetectBatch: create shm: %w", err)
 		}
 	}
 
+	// Write raw frame bytes to shared memory file
+	shmPath, metas, err := b.shm.WriteBatch(frames)
+	if err != nil {
+		return nil, fmt.Errorf("DetectBatch: write shm: %w", err)
+	}
+
+	// Send only metadata (path + offsets) — Python reads pixels from file
 	payload, err := json.Marshal(map[string]interface{}{
-		"frames": frameData,
+		"shm_path": shmPath,
+		"frames":   metas,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("DetectBatch: marshal: %w", err)
@@ -320,12 +331,28 @@ func (b *ProcessBridge) SegmentRallies(detections []DetectionResult, fps float64
 }
 
 // DetectCourt detects the court in a single frame.
+// Uses shared memory for the frame data.
 func (b *ProcessBridge) DetectCourt(frame Frame) (CourtData, error) {
+	if b.shm == nil {
+		var err error
+		b.shm, err = NewSharedMemBuffer(os.TempDir())
+		if err != nil {
+			return CourtData{}, fmt.Errorf("DetectCourt: create shm: %w", err)
+		}
+	}
+
+	shmPath, metas, err := b.shm.WriteBatch([]Frame{frame})
+	if err != nil {
+		return CourtData{}, fmt.Errorf("DetectCourt: write shm: %w", err)
+	}
+
 	payload, err := json.Marshal(map[string]interface{}{
 		"frame": map[string]interface{}{
-			"width":       frame.Width,
-			"height":      frame.Height,
-			"data_base64": base64.StdEncoding.EncodeToString(frame.Data),
+			"shm_path": shmPath,
+			"offset":   metas[0].Offset,
+			"width":    metas[0].Width,
+			"height":   metas[0].Height,
+			"size":     metas[0].Size,
 		},
 	})
 	if err != nil {
@@ -366,9 +393,13 @@ func (b *ProcessBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) 
 // Close releases resources held by the process bridge.
 // Safe to call multiple times.
 func (b *ProcessBridge) Close() {
+	if b.shm != nil {
+		b.shm.Close()
+		b.shm = nil
+	}
 	if b.worker != nil {
-		b.worker.Stop() // Stop worker first (drains in-flight calls)
-		b.worker.backend.close() // Then kill subprocess
+		b.worker.Stop()
+		b.worker.backend.close()
 	}
 }
 

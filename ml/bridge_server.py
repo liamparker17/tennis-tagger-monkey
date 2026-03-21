@@ -61,15 +61,27 @@ def _encode(obj: Any) -> str:
 # Frame decoding helper
 # ---------------------------------------------------------------------------
 def _decode_frame(frame_dict: dict) -> np.ndarray:
-    """Decode a base64-encoded frame dict to a numpy BGR array.
+    """Decode a frame dict to a numpy array.
 
-    Expected keys: ``width``, ``height``, ``data_base64``.
+    Supports two modes:
+    - Shared memory: keys ``shm_path``, ``offset``, ``width``, ``height``, ``size``
+    - Base64 fallback: keys ``width``, ``height``, ``data_base64``
     """
     w = frame_dict["width"]
     h = frame_dict["height"]
-    raw = base64.b64decode(frame_dict["data_base64"])
-    arr = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3))
-    return arr
+
+    if "shm_path" in frame_dict:
+        # Shared memory mode — read raw bytes from file at offset
+        with open(frame_dict["shm_path"], "rb") as f:
+            f.seek(frame_dict["offset"])
+            raw = f.read(frame_dict["size"])
+        arr = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3))
+        return arr
+    else:
+        # Base64 fallback
+        raw = base64.b64decode(frame_dict["data_base64"])
+        arr = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3))
+        return arr
 
 
 # ---------------------------------------------------------------------------
@@ -124,12 +136,28 @@ class BridgeServer:
     # ---- RPC: detect_batch ------------------------------------------------
 
     def rpc_detect_batch(self, params: dict) -> Any:
-        """Decode base64 frames and run batch detection."""
+        """Decode frames (shared memory or base64) and run batch detection."""
         self._require_init()
         frames_data = params.get("frames", [])
         if not frames_data:
             return []
-        batch = [_decode_frame(f) for f in frames_data]
+
+        shm_path = params.get("shm_path")
+        if shm_path:
+            # Shared memory mode: read all frames from single file
+            batch = []
+            with open(shm_path, "rb") as f:
+                for meta in frames_data:
+                    f.seek(meta["offset"])
+                    raw = f.read(meta["size"])
+                    arr = np.frombuffer(raw, dtype=np.uint8).reshape(
+                        (meta["height"], meta["width"], 3)
+                    )
+                    batch.append(arr)
+        else:
+            # Base64 fallback
+            batch = [_decode_frame(f) for f in frames_data]
+
         return self.detector.detect_batch(batch)
 
     # ---- RPC: detect_court ------------------------------------------------
