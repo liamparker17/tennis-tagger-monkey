@@ -40,7 +40,13 @@ class Analyzer:
     def detect_court(self, frame: np.ndarray) -> dict:
         """Detect court boundaries via Canny + HoughLinesP + findHomography.
 
-        The result is cached until :meth:`reset_court_cache` is called.
+        Uses multi-threshold Canny edge detection, edge dilation, and
+        line classification (horizontal vs vertical) for robust court
+        corner estimation.
+
+        The result is cached on success until :meth:`reset_court_cache`
+        is called.  Failed detections (confidence == 0) are **not**
+        cached so the next call retries.
 
         Args:
             frame: BGR image.
@@ -53,40 +59,53 @@ class Analyzer:
         if self._court_cache is not None:
             return self._court_cache
 
+        h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 
-        lines = cv2.HoughLinesP(
-            edges,
-            rho=1,
-            theta=np.pi / 180,
-            threshold=100,
-            minLineLength=100,
-            maxLineGap=10,
-        )
+        # Multi-threshold Canny — break on first successful detection
+        lines = None
+        thresholds = [(30, 100), (50, 150), (75, 200)]
+        for lo, hi in thresholds:
+            edges = cv2.Canny(gray, lo, hi, apertureSize=3)
+            edges = cv2.dilate(edges, kernel, iterations=1)
 
-        if lines is None or len(lines) < 4:
-            result: dict = {
+            detected = cv2.HoughLinesP(
+                edges,
+                rho=1,
+                theta=np.pi / 180,
+                threshold=80,
+                minLineLength=50,
+                maxLineGap=20,
+            )
+            if detected is not None and len(detected) >= 4:
+                lines = detected
+                break
+
+        if lines is None:
+            return {
                 "corners": None,
                 "homography": None,
                 "method": "line_detection",
                 "confidence": 0.0,
             }
-            # Do NOT cache a failure — retry on next frame
-            return result
 
-        h, w = frame.shape[:2]
+        # Classify lines into horizontal and vertical
+        horizontals, verticals = self._separate_lines(lines, w, h)
 
-        # Approximate court corners from frame proportions
-        corners = np.array(
-            [
-                [w * 0.1, h * 0.8],  # bottom-left
-                [w * 0.9, h * 0.8],  # bottom-right
-                [w * 0.2, h * 0.2],  # top-left
-                [w * 0.8, h * 0.2],  # top-right
-            ],
-            dtype=np.float32,
-        )
+        # Corner estimation — try methods in priority order
+        if len(horizontals) >= 2 and len(verticals) >= 2:
+            corners = self._corners_from_lines(horizontals, verticals, w, h)
+            method = "line_intersection"
+            confidence = 0.9
+        elif len(lines) >= 4:
+            corners = self._corners_from_endpoints(lines, w, h)
+            method = "endpoint_extremes"
+            confidence = 0.7
+        else:
+            corners = self._default_corners(w, h)
+            method = "frame_proportion"
+            confidence = 0.5
 
         # Standard normalised court
         standard = np.array(
@@ -99,10 +118,10 @@ class Analyzer:
         self._court_cache = {
             "corners": corners.tolist(),
             "homography": homography,
-            "method": "line_detection",
-            "confidence": 0.8,
+            "method": method,
+            "confidence": confidence,
         }
-        logger.info("Court detected and cached")
+        logger.info("Court detected (%s, confidence=%.2f) and cached", method, confidence)
         return self._court_cache
 
     def reset_court_cache(self) -> None:
@@ -223,6 +242,130 @@ class Analyzer:
 
         logger.info("Segmented %d rallies from %d ball frames", len(rallies), len(ball_frames))
         return rallies
+
+    # ------------------------------------------------------------------
+    # Court detection helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _default_corners(w: int, h: int) -> np.ndarray:
+        """Frame-proportion fallback for court corners."""
+        return np.array(
+            [
+                [w * 0.1, h * 0.8],   # bottom-left
+                [w * 0.9, h * 0.8],   # bottom-right
+                [w * 0.2, h * 0.2],   # top-left
+                [w * 0.8, h * 0.2],   # top-right
+            ],
+            dtype=np.float32,
+        )
+
+    @staticmethod
+    def _separate_lines(
+        lines: np.ndarray, w: int, h: int,
+    ) -> tuple[list, list]:
+        """Classify detected lines into horizontal and vertical groups.
+
+        Lines shorter than 30 px are filtered out.
+        Horizontal: angle < 30 deg or > 150 deg.
+        Vertical: angle between 60 and 120 deg.
+        """
+        horizontals: list = []
+        verticals: list = []
+
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            length = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+            if length < 30:
+                continue
+            angle = abs(np.degrees(np.arctan2(y2 - y1, x2 - x1))) % 180
+            if angle < 30 or angle > 150:
+                horizontals.append((x1, y1, x2, y2))
+            elif 60 <= angle <= 120:
+                verticals.append((x1, y1, x2, y2))
+
+        return horizontals, verticals
+
+    def _corners_from_lines(
+        self,
+        horizontals: list,
+        verticals: list,
+        w: int,
+        h: int,
+    ) -> np.ndarray:
+        """Compute court corners from horizontal/vertical line intersections."""
+        # Sort horizontals by average y (top first)
+        horizontals = sorted(horizontals, key=lambda l: (l[1] + l[3]) / 2)
+        # Sort verticals by average x (left first)
+        verticals = sorted(verticals, key=lambda l: (l[0] + l[2]) / 2)
+
+        top_h = horizontals[0]
+        bot_h = horizontals[-1]
+        left_v = verticals[0]
+        right_v = verticals[-1]
+
+        tl = self._line_intersection(top_h, left_v, w, h)
+        tr = self._line_intersection(top_h, right_v, w, h)
+        bl = self._line_intersection(bot_h, left_v, w, h)
+        br = self._line_intersection(bot_h, right_v, w, h)
+
+        return np.array([bl, br, tl, tr], dtype=np.float32)
+
+    @staticmethod
+    def _corners_from_endpoints(lines: np.ndarray, w: int, h: int) -> np.ndarray:
+        """Estimate court corners from the extreme endpoints of all lines."""
+        pts = []
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            pts.append((x1, y1))
+            pts.append((x2, y2))
+
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        return np.array(
+            [
+                [min_x, max_y],  # bottom-left
+                [max_x, max_y],  # bottom-right
+                [min_x, min_y],  # top-left
+                [max_x, min_y],  # top-right
+            ],
+            dtype=np.float32,
+        )
+
+    @staticmethod
+    def _line_intersection(
+        line1: tuple, line2: tuple, w: int, h: int,
+    ) -> np.ndarray:
+        """Compute intersection of two line segments, clamped to frame bounds.
+
+        Each line is a tuple ``(x1, y1, x2, y2)``.
+        Returns a 1-D array ``[x, y]``.
+        """
+        x1, y1, x2, y2 = line1
+        x3, y3, x4, y4 = line2
+
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denom) < 1e-6:
+            # Parallel lines — return midpoint of the two midpoints
+            mx = ((x1 + x2) / 2 + (x3 + x4) / 2) / 2
+            my = ((y1 + y2) / 2 + (y3 + y4) / 2) / 2
+            return np.array(
+                [np.clip(mx, 0, w - 1), np.clip(my, 0, h - 1)],
+                dtype=np.float32,
+            )
+
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        ix = x1 + t * (x2 - x1)
+        iy = y1 + t * (y2 - y1)
+
+        return np.array(
+            [np.clip(ix, 0, w - 1), np.clip(iy, 0, h - 1)],
+            dtype=np.float32,
+        )
 
     # ------------------------------------------------------------------
     # Helpers
