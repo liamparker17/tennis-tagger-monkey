@@ -24,6 +24,7 @@ type Result struct {
 	Court           bridge.CourtData
 	Rallies         []bridge.RallyResult
 	Placements      []bridge.PlacementResult
+	Strokes         []bridge.StrokeResult
 }
 
 // ProgressInfo reports the current state of pipeline processing.

@@ -89,6 +89,11 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("CSV exported to: %s\n", outputPath)
+
+		if report := a.GetTacticalReport(); report != nil {
+			fmt.Println()
+			fmt.Print(report.FormatText())
+		}
 	} else {
 		fmt.Println("Tennis Tagger v2")
 		fmt.Println("Usage: tagger [--mock] [--python path] [--live source] <video.mp4>")

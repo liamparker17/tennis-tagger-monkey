@@ -8,6 +8,7 @@ import (
 	"github.com/liamp/tennis-tagger/internal/config"
 	"github.com/liamp/tennis-tagger/internal/export"
 	"github.com/liamp/tennis-tagger/internal/pipeline"
+	"github.com/liamp/tennis-tagger/internal/tactics"
 )
 
 // App is the top-level application struct that orchestrates the pipeline,
@@ -18,6 +19,7 @@ type App struct {
 	config   *config.Config
 	exporter *export.DartfishExporter
 	result   *pipeline.Result
+	report   *tactics.TacticalReport
 }
 
 // NewApp creates a new App with the given config and bridge backend.
@@ -113,6 +115,29 @@ func (a *App) StopLive() {
 // IsLive returns whether live processing is currently active.
 func (a *App) IsLive() bool {
 	return a.pipeline.IsLive()
+}
+
+// GetTacticalReport runs pattern analysis and report generation on the current
+// pipeline result. Returns nil if no result is available.
+func (a *App) GetTacticalReport() *tactics.TacticalReport {
+	if a.result == nil {
+		return nil
+	}
+
+	patterns := tactics.AnalyzePatterns(
+		a.result.Detections,
+		a.result.Placements,
+		a.result.Strokes,
+		a.result.Rallies,
+	)
+
+	durationSec := 0.0
+	if a.result.FPS > 0 {
+		durationSec = float64(a.result.TotalFrames) / a.result.FPS
+	}
+
+	a.report = tactics.GenerateReport(patterns, a.result.Rallies, durationSec)
+	return a.report
 }
 
 // resultToRows converts a pipeline Result into Dartfish export rows.
