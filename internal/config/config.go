@@ -74,6 +74,10 @@ func Default() *Config {
 func Load(path string) (*Config, error) {
 	cfg := Default()
 
+	if path == "" {
+		return cfg, nil
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

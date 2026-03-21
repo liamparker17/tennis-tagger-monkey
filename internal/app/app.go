@@ -168,8 +168,17 @@ func (a *App) TriggerRetrain() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("flush corrections: %w", err)
 	}
 
+	// Convert corrections to training pairs for the bridge
+	pairs := make([]bridge.TrainingPair, len(batch.Corrections))
+	for i, c := range batch.Corrections {
+		pairs[i] = bridge.TrainingPair{
+			VideoPath: c.VideoPath,
+			CSVPath:   fmt.Sprintf("%s:%s->%s", c.Type, c.Original, c.Corrected),
+		}
+	}
+
 	cfg := bridge.TrainingConfig{Task: "fine_tune", Epochs: 5, BatchSize: 16}
-	if err := a.pipeline.Bridge().TrainModel(nil, cfg); err != nil {
+	if err := a.pipeline.Bridge().TrainModel(pairs, cfg); err != nil {
 		return nil, fmt.Errorf("retrain: %w", err)
 	}
 

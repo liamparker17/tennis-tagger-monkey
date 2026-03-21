@@ -3,6 +3,7 @@ package bridge
 import (
 	"encoding/json"
 	"runtime"
+	"sync"
 )
 
 // bridgeResponse carries the result of a bridge call back to the caller.
@@ -32,6 +33,7 @@ type Worker struct {
 	requests chan bridgeRequest
 	done     chan struct{}
 	backend  pythonCaller
+	stopOnce sync.Once
 }
 
 // NewWorker creates and starts a Worker that dispatches calls to the given backend.
@@ -72,9 +74,12 @@ func (w *Worker) Call(method string, payload json.RawMessage) (json.RawMessage, 
 }
 
 // Stop closes the requests channel and waits for the worker goroutine to finish.
+// Safe to call multiple times.
 func (w *Worker) Stop() {
-	close(w.requests)
-	<-w.done
+	w.stopOnce.Do(func() {
+		close(w.requests)
+		<-w.done
+	})
 }
 
 // StubCaller is a pythonCaller that returns an empty JSON object for all calls.

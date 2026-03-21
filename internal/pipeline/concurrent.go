@@ -1,7 +1,9 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/liamp/tennis-tagger/internal/bridge"
@@ -75,8 +77,9 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 	detCh := make(chan detectionBatch, 2)
 
 	var wg sync.WaitGroup
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Stage 1 error and Stage 2 error captured here
 	var stage1Err, stage2Err error
 
 	// --- Stage 1: Frame extraction (goroutine) ---
@@ -94,13 +97,18 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 			frames, err := vr.ExtractBatch(start, count)
 			if err != nil {
 				stage1Err = fmt.Errorf("extract batch at frame %d: %w", start, err)
+				cancel()
 				return
 			}
 			if len(frames) == 0 {
 				return
 			}
 
-			frameCh <- frameBatch{Frames: frames, StartFrame: start}
+			select {
+			case frameCh <- frameBatch{Frames: frames, StartFrame: start}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -111,29 +119,40 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 		defer close(detCh)
 
 		for fb := range frameCh {
-			// Convert video frames to bridge frames
 			bFrames := make([]bridge.Frame, len(fb.Frames))
 			for i, f := range fb.Frames {
 				bFrames[i] = videoFrameToBridgeFrame(f)
 			}
 
-			// Run detection
 			detections, err := p.bridge.DetectBatch(bFrames)
 			if err != nil {
 				stage2Err = fmt.Errorf("detect batch at frame %d: %w", fb.StartFrame, err)
+				cancel()
+				// Drain frameCh to unblock stage 1
+				for range frameCh {
+				}
 				return
 			}
 
 			// Set FrameIndex and filter invalid BBoxes
 			for i := range detections {
 				detections[i].FrameIndex = fb.StartFrame + i
+				before := len(detections[i].Players)
 				detections[i].Players = filterBBoxes(detections[i].Players)
+				if dropped := before - len(detections[i].Players); dropped > 0 {
+					slog.Warn("Dropped invalid player bboxes", "frame", fb.StartFrame+i, "count", dropped)
+				}
 				if detections[i].Ball != nil && !isValidBBox(*detections[i].Ball) {
+					slog.Warn("Dropped invalid ball bbox", "frame", fb.StartFrame+i)
 					detections[i].Ball = nil
 				}
 			}
 
-			detCh <- detectionBatch{Detections: detections, StartFrame: fb.StartFrame}
+			select {
+			case detCh <- detectionBatch{Detections: detections, StartFrame: fb.StartFrame}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -147,10 +166,16 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 		}
 
 		result.ProcessedFrames = db.StartFrame + len(db.Detections)
-		p.progress.ProcessedFrames = result.ProcessedFrames
-		if p.progress.TotalFrames > 0 {
-			p.progress.Percent = float64(p.progress.ProcessedFrames) / float64(p.progress.TotalFrames) * 100
+		pct := 0.0
+		if meta.TotalFrames > 0 {
+			pct = float64(result.ProcessedFrames) / float64(meta.TotalFrames) * 100
 		}
+		p.setProgress(ProgressInfo{
+			ProcessedFrames: result.ProcessedFrames,
+			TotalFrames:     meta.TotalFrames,
+			Percent:         pct,
+			Stage:           "processing",
+		})
 
 		// Save checkpoint periodically
 		if result.ProcessedFrames%checkpointEvery < batchSize {

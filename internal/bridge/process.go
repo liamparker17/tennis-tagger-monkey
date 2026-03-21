@@ -354,7 +354,12 @@ func (b *ProcessBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) 
 		return fmt.Errorf("TrainModel: marshal: %w", err)
 	}
 
-	_, err = b.worker.Call("train_model", payload)
+	// Route to correct Python method based on task
+	method := "train"
+	if config.Task == "fine_tune" {
+		method = "fine_tune"
+	}
+	_, err = b.worker.Call(method, payload)
 	return err
 }
 
@@ -362,9 +367,8 @@ func (b *ProcessBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) 
 // Safe to call multiple times.
 func (b *ProcessBridge) Close() {
 	if b.worker != nil {
-		b.worker.backend.close()
-		b.worker.Stop()
-		b.worker = nil
+		b.worker.Stop() // Stop worker first (drains in-flight calls)
+		b.worker.backend.close() // Then kill subprocess
 	}
 }
 

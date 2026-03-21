@@ -41,6 +41,7 @@ type Pipeline struct {
 	config      *config.Config
 	tracker     *tracker.MultiObjectTracker
 	progress    ProgressInfo
+	progressMu  sync.Mutex
 	liveReader  *video.LiveReader // nil when not in live mode
 	liveRunning bool
 	liveMu      sync.Mutex
@@ -55,9 +56,18 @@ func New(b bridge.BridgeBackend, cfg *config.Config) *Pipeline {
 	}
 }
 
-// Progress returns the current processing progress.
+// Progress returns a snapshot of the current processing progress (thread-safe).
 func (p *Pipeline) Progress() ProgressInfo {
+	p.progressMu.Lock()
+	defer p.progressMu.Unlock()
 	return p.progress
+}
+
+// setProgress updates progress (thread-safe).
+func (p *Pipeline) setProgress(info ProgressInfo) {
+	p.progressMu.Lock()
+	p.progress = info
+	p.progressMu.Unlock()
 }
 
 // Bridge returns the underlying BridgeBackend used by this pipeline.
