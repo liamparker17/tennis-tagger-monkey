@@ -91,12 +91,22 @@ func Open(path string) (*VideoReader, error) {
 		totalFrames = int(duration * fps)
 	}
 
+	// Compute scaled output dimensions (scale=640:-2 in ffmpeg).
+	outWidth := 640
+	outHeight := vs.Height
+	if vs.Width > 0 {
+		outHeight = vs.Height * outWidth / vs.Width
+		if outHeight%2 != 0 {
+			outHeight++ // round to even (ffmpeg -2 flag)
+		}
+	}
+
 	return &VideoReader{
 		meta: VideoMeta{
 			Path:        path,
 			FPS:         fps,
-			Width:       vs.Width,
-			Height:      vs.Height,
+			Width:       outWidth,
+			Height:      outHeight,
 			TotalFrames: totalFrames,
 			Duration:    duration,
 		},
@@ -121,11 +131,15 @@ func (vr *VideoReader) ExtractBatch(start, count int) ([]Frame, error) {
 		seekSec = float64(start) / vr.meta.FPS
 	}
 
+	// Scale to 640px width (YOLO resizes to 640 internally anyway).
+	// This dramatically reduces memory and data transfer.
+	// -2 for height means "maintain aspect ratio, round to even".
 	cmd := exec.Command(
 		"ffmpeg",
 		"-ss", fmt.Sprintf("%.6f", seekSec),
 		"-i", vr.meta.Path,
 		"-frames:v", strconv.Itoa(count),
+		"-vf", "scale=640:-2",
 		"-f", "rawvideo",
 		"-pix_fmt", "rgb24",
 		"-v", "error",

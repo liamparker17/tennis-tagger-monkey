@@ -119,7 +119,7 @@ class BridgeServer:
         from ml.score import ScoreTracker
         from ml.trainer import Trainer
 
-        detector_model = os.path.join(models_dir, "yolov8n.pt")
+        detector_model = os.path.join(models_dir, "yolov8s.pt")
         classifier_model = os.path.join(models_dir, "stroke_3dcnn.pt")
 
         self.detector = Detector(model_path=detector_model, device=device)
