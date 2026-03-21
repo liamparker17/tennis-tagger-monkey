@@ -150,7 +150,12 @@ class Analyzer:
                 {"frame": int, "zone": str, "depth": str,
                  "court_position": (x, y)}
         """
-        H = court.get("homography") if court else None
+        H_raw = court.get("homography") if court else None
+        # Convert list-of-lists to numpy array if needed
+        if H_raw is not None and not isinstance(H_raw, np.ndarray):
+            H = np.array(H_raw, dtype=np.float64)
+        else:
+            H = H_raw
         placements: list[dict] = []
 
         for idx, det in enumerate(detections):
@@ -158,9 +163,18 @@ class Analyzer:
             if ball is None:
                 continue
 
-            bbox = ball["bbox"]
-            cx = (bbox[0] + bbox[2]) / 2.0
-            cy = (bbox[1] + bbox[3]) / 2.0
+            # Handle both formats:
+            #   Python detector: {"bbox": [x1,y1,x2,y2]}
+            #   Go bridge JSON:  {"x1": .., "y1": .., "x2": .., "y2": ..}
+            if "bbox" in ball:
+                bbox = ball["bbox"]
+                cx = (bbox[0] + bbox[2]) / 2.0
+                cy = (bbox[1] + bbox[3]) / 2.0
+            elif "x1" in ball:
+                cx = (ball["x1"] + ball["x2"]) / 2.0
+                cy = (ball["y1"] + ball["y2"]) / 2.0
+            else:
+                continue
 
             # Project onto normalised court
             if H is not None:
