@@ -16,6 +16,7 @@ func main() {
 
 	useMock := flag.Bool("mock", false, "Use MockBridge (no Python needed)")
 	pythonPath := flag.String("python", "python", "Path to Python executable")
+	liveSource := flag.String("live", "", "Live source (webcam index or RTSP URL)")
 	flag.Parse()
 
 	cfg, err := config.Load("")
@@ -47,6 +48,30 @@ func main() {
 
 	a := app.NewApp(cfg, b)
 
+	if *liveSource != "" {
+		fmt.Printf("Starting live capture from: %s\n", *liveSource)
+		ch, err := a.StartLive(*liveSource)
+		if err != nil {
+			slog.Error("Failed to start live capture", "error", err)
+			os.Exit(1)
+		}
+
+		totalDetections := 0
+		for result := range ch {
+			if result.Error != nil {
+				slog.Error("Live batch error", "error", result.Error)
+				break
+			}
+			totalDetections += len(result.Detections)
+			fmt.Printf("Live batch: %d frames, %d detections (total: %d)\n",
+				result.FrameCount, len(result.Detections), totalDetections)
+		}
+
+		a.StopLive()
+		fmt.Println("Live capture stopped.")
+		return
+	}
+
 	args := flag.Args()
 	if len(args) > 0 {
 		videoPath := args[0]
@@ -66,6 +91,6 @@ func main() {
 		fmt.Printf("CSV exported to: %s\n", outputPath)
 	} else {
 		fmt.Println("Tennis Tagger v2")
-		fmt.Println("Usage: tagger [--mock] [--python path] <video.mp4>")
+		fmt.Println("Usage: tagger [--mock] [--python path] [--live source] <video.mp4>")
 	}
 }

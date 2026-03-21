@@ -99,6 +99,22 @@ func (a *App) ExportCSV(outputPath string) error {
 	return nil
 }
 
+// StartLive begins live capture and processing from the given source.
+// Returns a channel of LiveResult that emits detection results per batch.
+func (a *App) StartLive(source string) (<-chan pipeline.LiveResult, error) {
+	return a.pipeline.ProcessLive(source, 640, 480, 30.0)
+}
+
+// StopLive stops the live capture and processing.
+func (a *App) StopLive() {
+	a.pipeline.StopLive()
+}
+
+// IsLive returns whether live processing is currently active.
+func (a *App) IsLive() bool {
+	return a.pipeline.IsLive()
+}
+
 // resultToRows converts a pipeline Result into Dartfish export rows.
 // Each detection frame becomes one row with basic fields populated.
 func resultToRows(r *pipeline.Result) []export.ResultRow {

@@ -26,6 +26,8 @@ type PipelineConfig struct {
 	CheckpointEvery int    `yaml:"checkpointEvery"`
 	DetectorBackend string `yaml:"detectorBackend"`
 	ClassifierModel string `yaml:"classifierModel"`
+	LiveBatchSize   int    `yaml:"liveBatchSize"`
+	LiveSource      string `yaml:"liveSource"`
 }
 
 // ExportConfig holds export format settings.
@@ -54,6 +56,8 @@ func Default() *Config {
 			CheckpointEvery: 1000,
 			DetectorBackend: "yolo",
 			ClassifierModel: "3dcnn",
+			LiveBatchSize:   4,
+			LiveSource:      "0",
 		},
 		Export: ExportConfig{
 			Format: "dartfish",

@@ -122,6 +122,16 @@ func TestLoadConfig_MLDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_LiveDefaults(t *testing.T) {
+	cfg, _ := Load("")
+	if cfg.Pipeline.LiveBatchSize != 4 {
+		t.Errorf("Pipeline.LiveBatchSize = %d, want 4", cfg.Pipeline.LiveBatchSize)
+	}
+	if cfg.Pipeline.LiveSource != "0" {
+		t.Errorf("Pipeline.LiveSource = %q, want %q", cfg.Pipeline.LiveSource, "0")
+	}
+}
+
 func TestSaveConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

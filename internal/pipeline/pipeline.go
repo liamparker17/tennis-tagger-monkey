@@ -5,6 +5,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/liamp/tennis-tagger/internal/bridge"
 	"github.com/liamp/tennis-tagger/internal/config"
@@ -35,10 +36,13 @@ type ProgressInfo struct {
 
 // Pipeline orchestrates video analysis through detection, tracking, and post-processing.
 type Pipeline struct {
-	bridge   bridge.BridgeBackend
-	config   *config.Config
-	tracker  *tracker.MultiObjectTracker
-	progress ProgressInfo
+	bridge      bridge.BridgeBackend
+	config      *config.Config
+	tracker     *tracker.MultiObjectTracker
+	progress    ProgressInfo
+	liveReader  *video.LiveReader // nil when not in live mode
+	liveRunning bool
+	liveMu      sync.Mutex
 }
 
 // New creates a new Pipeline with the given backend and configuration.

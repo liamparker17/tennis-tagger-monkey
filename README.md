@@ -54,6 +54,23 @@ go build ./cmd/tagger/
 
 This processes the video and writes a `<video.mp4>_output.csv` file with 62-column Dartfish-compatible data.
 
+## Live Mode
+
+Process frames from a webcam or RTSP stream in real time:
+
+```bash
+# Webcam (index 0)
+./tagger --live 0
+
+# RTSP stream
+./tagger --live rtsp://192.168.1.100:554/stream
+
+# With mock bridge (no Python)
+./tagger --mock --live 0
+```
+
+Live mode prints detection counts per batch as frames are processed.
+
 ## Test
 
 ```bash
