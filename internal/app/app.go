@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/liamp/tennis-tagger/internal/bridge"
@@ -10,8 +11,9 @@ import (
 )
 
 // App is the top-level application struct that orchestrates the pipeline,
-// configuration, and export. It will later become the Wails binding target.
+// configuration, and export. It serves as the Wails binding target.
 type App struct {
+	ctx      context.Context // Wails application context, set via Startup()
 	pipeline *pipeline.Pipeline
 	config   *config.Config
 	exporter *export.DartfishExporter
@@ -25,6 +27,37 @@ func NewApp(cfg *config.Config, b bridge.BridgeBackend) *App {
 		config:   cfg,
 		exporter: export.NewDartfishExporter(),
 	}
+}
+
+// Startup is called by Wails at application start. It stores the
+// application context for use by Wails runtime calls (dialogs, events).
+func (a *App) Startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+// SelectVideoPath opens a file dialog to select a video file.
+// Returns "" until Wails runtime is wired in.
+// TODO: wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{...})
+func (a *App) SelectVideoPath() string {
+	return ""
+}
+
+// ProcessVideoAsync starts video processing in a background goroutine.
+// TODO: emit wailsRuntime.EventsEmit(a.ctx, "processing-complete") when done
+// TODO: emit wailsRuntime.EventsEmit(a.ctx, "processing-error", err.Error()) on failure
+func (a *App) ProcessVideoAsync(path string) {
+	go func() {
+		if err := a.ProcessVideo(path); err != nil {
+			// TODO: wailsRuntime.EventsEmit(a.ctx, "processing-error", err.Error())
+			return
+		}
+		// TODO: wailsRuntime.EventsEmit(a.ctx, "processing-complete", nil)
+	}()
+}
+
+// GetDeviceInfo returns the configured compute device as a string map.
+func (a *App) GetDeviceInfo() map[string]string {
+	return map[string]string{"device": a.config.Device}
 }
 
 // ProcessVideo runs the full analysis pipeline on the video at path

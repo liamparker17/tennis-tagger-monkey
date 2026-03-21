@@ -1,0 +1,9 @@
+{
+  "name": "tennis-tagger-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'Run wails dev from project root'",
+    "build": "echo 'Run wails build from project root'"
+  }
+}
