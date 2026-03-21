@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "models": {
+    "detector": {
+      "file": "yolov8x.pt",
+      "size": 136000000,
+      "sha256": "",
+      "required": true,
+      "description": "YOLOv8x player + ball detector"
+    },
+    "stroke": {
+      "file": "stroke_x3d.pt",
+      "size": 20000000,
+      "sha256": "",
+      "required": true,
+      "description": "3D CNN stroke classifier"
+    },
+    "pose": {
+      "file": "yolov8n-pose.pt",
+      "size": 12000000,
+      "sha256": "",
+      "required": true,
+      "description": "YOLOv8n pose estimator"
+    }
+  }
+}
