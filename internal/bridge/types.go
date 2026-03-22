@@ -120,6 +120,23 @@ type TrainingConfig struct {
 	Device    string `json:"device"`
 }
 
+// Bounce holds a single detected ball bounce with court position and in/out call.
+type Bounce struct {
+	FrameIndex int     `json:"frameIndex"`
+	CX         float64 `json:"cx"`
+	CY         float64 `json:"cy"`
+	InOut      string  `json:"inOut"` // "in", "out", "close_call"
+}
+
+// TrajectoryResult holds a fitted ball trajectory segment.
+type TrajectoryResult struct {
+	StartFrame int       `json:"startFrame"`
+	EndFrame   int       `json:"endFrame"`
+	Bounces    []Bounce  `json:"bounces"`
+	SpeedKPH   float64   `json:"speedKph"`
+	Confidence float64   `json:"confidence"`
+}
+
 // BridgeBackend defines the interface for ML backend communication.
 // Implementations may use subprocess, gRPC, or in-process FFI.
 type BridgeBackend interface {

@@ -331,6 +331,53 @@ class BridgeServer:
             raise ValueError("version is required")
         return self.trainer.rollback(version)
 
+    # ---- RPC: fit_trajectories --------------------------------------------
+
+    def rpc_fit_trajectories(self, params: dict) -> Any:
+        """Fit ball trajectories from a sequence of ball position detections.
+
+        Input params:
+            ball_positions: list of {x, y, confidence, frameIndex}
+            court: {homography: [[3x3 matrix]]}
+            fps: float
+
+        Returns list of trajectory dicts (see ml.trajectory.Trajectory.to_dict).
+        """
+        from ml.trajectory import TrajectoryFitter
+
+        ball_positions = params.get("ball_positions", [])
+        court = params.get("court", {})
+        fps = float(params.get("fps", 30.0))
+
+        # Extract homography — accept both nested list and flat list-of-lists
+        homography_raw = court.get("homography", [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+        homography = np.array(homography_raw, dtype=float)
+
+        if homography.shape != (3, 3):
+            raise ValueError(f"homography must be 3x3, got shape {homography.shape}")
+
+        # Normalise detection key names: Go sends camelCase (frameIndex),
+        # Python internally uses snake_case (frame_index).
+        detections = []
+        for bp in ball_positions:
+            detections.append({
+                "x": float(bp.get("x", 0)),
+                "y": float(bp.get("y", 0)),
+                "confidence": float(bp.get("confidence", 0)),
+                "frame_index": int(bp.get("frameIndex", bp.get("frame_index", 0))),
+            })
+
+        if not detections:
+            return []
+
+        fitter = TrajectoryFitter(homography, fps)
+        traj = fitter.fit(detections)
+
+        if traj is None:
+            return []
+
+        return [traj.to_dict()]
+
     # ---- Internal ---------------------------------------------------------
 
     def _require_init(self) -> None:
@@ -351,6 +398,7 @@ class BridgeServer:
             "fine_tune": self.rpc_fine_tune,
             "get_versions": self.rpc_get_versions,
             "rollback": self.rpc_rollback,
+            "fit_trajectories": self.rpc_fit_trajectories,
         }
         handler = handlers.get(method)
         if handler is None:

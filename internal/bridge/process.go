@@ -456,6 +456,48 @@ func (b *ProcessBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) 
 	return err
 }
 
+// FitTrajectories sends a list of ball positions to the Python trajectory fitter
+// and returns fitted TrajectoryResult values with bounce detection and in/out calls.
+func (b *ProcessBridge) FitTrajectories(positions []BallPosition, court CourtData, fps float64) ([]TrajectoryResult, error) {
+	// Convert BallPosition to the shape Python expects (camelCase keys).
+	type ballPos struct {
+		X          float64 `json:"x"`
+		Y          float64 `json:"y"`
+		Confidence float64 `json:"confidence"`
+		FrameIndex int     `json:"frameIndex"`
+	}
+
+	pyPositions := make([]ballPos, len(positions))
+	for i, p := range positions {
+		pyPositions[i] = ballPos{
+			X:          p.X,
+			Y:          p.Y,
+			Confidence: p.Confidence,
+			FrameIndex: p.FrameIndex,
+		}
+	}
+
+	payload, err := json.Marshal(map[string]interface{}{
+		"ball_positions": pyPositions,
+		"court":          court,
+		"fps":            fps,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("FitTrajectories: marshal: %w", err)
+	}
+
+	result, err := b.worker.Call("fit_trajectories", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var trajectories []TrajectoryResult
+	if err := json.Unmarshal(result, &trajectories); err != nil {
+		return nil, fmt.Errorf("FitTrajectories: unmarshal: %w", err)
+	}
+	return trajectories, nil
+}
+
 // Close releases resources held by the process bridge.
 // Safe to call multiple times.
 func (b *ProcessBridge) Close() {
