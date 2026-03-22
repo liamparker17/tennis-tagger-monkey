@@ -102,6 +102,10 @@ class Detector:
     def detect_batch(self, frames: np.ndarray) -> list[dict]:
         """Detect players and ball in a batch of BGR frames.
 
+        Uses a two-pass approach:
+        1. Full-frame pass — catches near player + ball
+        2. Top-half crop pass — effectively 2x zoom on far court, catches far player
+
         Args:
             frames: ``list[np.ndarray]`` or a 4-D array ``(N, H, W, 3)``.
 
@@ -116,67 +120,59 @@ class Detector:
         if self.model is None or len(frames) == 0:
             return self._fallback(frames)
 
-        # Use ball threshold as minimum conf (lower than player threshold).
-        # Players are filtered at _PLAYER_CONF in the post-processing loop below.
-        min_conf = _BALL_CONF
+        predict_kwargs = dict(
+            conf=_BALL_CONF,
+            classes=[CLASS_PERSON, CLASS_SPORTS_BALL],
+            verbose=False,
+            device=self.device,
+            imgsz=640,
+            max_det=20,
+        )
+        if self.backend == "yolo":
+            predict_kwargs["half"] = self.device != "cpu"
+            predict_kwargs["augment"] = False
 
         try:
-            predict_kwargs = dict(
-                conf=min_conf,
-                classes=[CLASS_PERSON, CLASS_SPORTS_BALL],
-                verbose=False,
-                device=self.device,
-                imgsz=640,
-                max_det=20,
-            )
-            if self.backend == "yolo":
-                predict_kwargs["half"] = self.device != "cpu"
-                predict_kwargs["augment"] = False
-            # rtdetr: no half, no augment
+            # Pass 1: full frames
+            full_results = self.model.predict(frames, **predict_kwargs)
 
-            results_batch = self.model.predict(frames, **predict_kwargs)
+            # Pass 2: top-half crops (far court zoom)
+            crops = []
+            crop_heights = []
+            for f in frames:
+                h = f.shape[0]
+                half_h = h // 2
+                crops.append(f[:half_h, :, :])
+                crop_heights.append(half_h)
+
+            crop_results = self.model.predict(crops, **predict_kwargs)
         except Exception:
             logger.warning("Detection failed, using fallback", exc_info=True)
             return self._fallback(frames)
 
         output: list[dict] = []
-        for results in results_batch:
+        for idx, (full_res, crop_res) in enumerate(zip(full_results, crop_results)):
             players: list[dict] = []
             ball: Optional[dict] = None
 
-            boxes = results.boxes
-            if boxes is None or len(boxes) == 0:
-                output.append({"players": players, "ball": ball})
-                continue
+            # Extract from full-frame pass
+            players, ball = self._extract_detections(full_res)
 
-            xyxy = boxes.xyxy.cpu().numpy()
-            confs = boxes.conf.cpu().numpy()
-            classes = boxes.cls.cpu().numpy().astype(int)
+            # Extract from crop pass and remap coordinates
+            # (crop is top half, so y coordinates are already correct)
+            crop_players, crop_ball = self._extract_detections(crop_res)
+            # No coordinate adjustment needed — crop is the top half starting at y=0
 
-            for i in range(len(boxes)):
-                x1, y1, x2, y2 = xyxy[i]
-                conf = float(confs[i])
-                cls = int(classes[i])
+            # Merge crop players that don't overlap with existing detections
+            for cp in crop_players:
+                if not self._overlaps_any(cp, players, iou_thresh=0.3):
+                    players.append(cp)
 
-                if cls == CLASS_PERSON and conf >= _PLAYER_CONF:
-                    players.append({
-                        "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                        "confidence": conf,
-                    })
-                elif cls == CLASS_SPORTS_BALL and conf >= _BALL_CONF:
-                    w = x2 - x1
-                    h = y2 - y1
-                    if _BALL_MIN_PX < w < _BALL_MAX_PX and _BALL_MIN_PX < h < _BALL_MAX_PX:
-                        # Keep highest-confidence ball only
-                        if ball is None or conf > ball["confidence"]:
-                            ball = {
-                                "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                                "confidence": conf,
-                            }
+            # Use crop ball if no ball found in full frame (crop may see it better)
+            if ball is None and crop_ball is not None:
+                ball = crop_ball
 
-            # Keep only the 2 largest players by bbox area.
-            # In broadcast tennis footage, the actual players have the largest
-            # bounding boxes; ball kids, umpires, and crowd are smaller.
+            # Keep only the 2 largest players by bbox area
             if len(players) > 2:
                 players.sort(
                     key=lambda p: (p["bbox"][2] - p["bbox"][0]) * (p["bbox"][3] - p["bbox"][1]),
@@ -192,6 +188,67 @@ class Detector:
             output.append({"players": players, "ball": ball})
 
         return output
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_detections(results) -> tuple[list[dict], Optional[dict]]:
+        """Parse YOLO results into players list and best ball."""
+        players: list[dict] = []
+        ball: Optional[dict] = None
+
+        boxes = results.boxes
+        if boxes is None or len(boxes) == 0:
+            return players, ball
+
+        xyxy = boxes.xyxy.cpu().numpy()
+        confs = boxes.conf.cpu().numpy()
+        classes = boxes.cls.cpu().numpy().astype(int)
+
+        for i in range(len(boxes)):
+            x1, y1, x2, y2 = xyxy[i]
+            conf = float(confs[i])
+            cls = int(classes[i])
+
+            if cls == CLASS_PERSON and conf >= _PLAYER_CONF:
+                players.append({
+                    "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                    "confidence": conf,
+                })
+            elif cls == CLASS_SPORTS_BALL and conf >= _BALL_CONF:
+                w = x2 - x1
+                h = y2 - y1
+                if _BALL_MIN_PX < w < _BALL_MAX_PX and _BALL_MIN_PX < h < _BALL_MAX_PX:
+                    if ball is None or conf > ball["confidence"]:
+                        ball = {
+                            "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                            "confidence": conf,
+                        }
+
+        return players, ball
+
+    @staticmethod
+    def _overlaps_any(det: dict, existing: list[dict], iou_thresh: float = 0.3) -> bool:
+        """Check if det overlaps with any existing detection above IoU threshold."""
+        bx = det["bbox"]
+        for e in existing:
+            ex = e["bbox"]
+            # Compute IoU
+            ix1 = max(bx[0], ex[0])
+            iy1 = max(bx[1], ex[1])
+            ix2 = min(bx[2], ex[2])
+            iy2 = min(bx[3], ex[3])
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            if inter == 0:
+                continue
+            area_a = (bx[2] - bx[0]) * (bx[3] - bx[1])
+            area_b = (ex[2] - ex[0]) * (ex[3] - ex[1])
+            iou = inter / (area_a + area_b - inter)
+            if iou >= iou_thresh:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Fallback (no YOLO)
