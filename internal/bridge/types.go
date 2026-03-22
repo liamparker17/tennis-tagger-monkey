@@ -89,6 +89,15 @@ type RallyResult struct {
 	DurationFrames int `json:"durationFrames"`
 }
 
+// BallPosition holds a ball detection with sub-pixel position and source.
+type BallPosition struct {
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
+	Confidence float64 `json:"confidence"`
+	FrameIndex int     `json:"frameIndex"`
+	Source     string  `json:"source"` // "tracknet", "yolo", "merged"
+}
+
 // BridgeConfig holds configuration for initializing a bridge backend.
 type BridgeConfig struct {
 	ModelsDir       string `json:"ModelsDir"`

@@ -248,6 +248,72 @@ func (b *ProcessBridge) DetectBatch(frames []Frame) ([]DetectionResult, error) {
 	return adaptDetectionResults(result)
 }
 
+// TrackNetBatch runs TrackNet ball detection on a batch of frames.
+// Uses shared memory file for frame data transfer (no base64 serialization).
+// Returns one BallPosition per frame where a ball was detected; frames with
+// no detection are omitted from the returned slice.
+func (b *ProcessBridge) TrackNetBatch(frames []Frame) ([]BallPosition, error) {
+	// Lazy init shared memory buffer
+	if b.shm == nil {
+		var err error
+		b.shm, err = NewSharedMemBuffer(os.TempDir())
+		if err != nil {
+			return nil, fmt.Errorf("TrackNetBatch: create shm: %w", err)
+		}
+	}
+
+	// Write raw frame bytes to shared memory file
+	shmPath, metas, err := b.shm.WriteBatch(frames)
+	if err != nil {
+		return nil, fmt.Errorf("TrackNetBatch: write shm: %w", err)
+	}
+
+	// Send only metadata (path + offsets) — Python reads pixels from file
+	payload, err := json.Marshal(map[string]interface{}{
+		"shm_path": shmPath,
+		"frames":   metas,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("TrackNetBatch: marshal: %w", err)
+	}
+
+	result, err := b.worker.Call("tracknet_batch", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse: [{"frame_index": int, "ball": {"x": float, "y": float, "confidence": float} | null}]
+	var raw []struct {
+		FrameIndex int      `json:"frame_index"`
+		Ball       *BallXY  `json:"ball"`
+	}
+	if err := json.Unmarshal(result, &raw); err != nil {
+		return nil, fmt.Errorf("TrackNetBatch: unmarshal: %w", err)
+	}
+
+	var positions []BallPosition
+	for _, r := range raw {
+		if r.Ball == nil {
+			continue
+		}
+		positions = append(positions, BallPosition{
+			X:          r.Ball.X,
+			Y:          r.Ball.Y,
+			Confidence: r.Ball.Confidence,
+			FrameIndex: r.FrameIndex,
+			Source:     "tracknet",
+		})
+	}
+	return positions, nil
+}
+
+// BallXY is an internal helper for decoding Python ball detection output.
+type BallXY struct {
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
+	Confidence float64 `json:"confidence"`
+}
+
 // ClassifyStrokes classifies strokes from frame clips.
 func (b *ProcessBridge) ClassifyStrokes(clips []FrameClip) ([]StrokeResult, error) {
 	// Encode clips with base64 frames

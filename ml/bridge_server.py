@@ -129,6 +129,13 @@ class BridgeServer:
         self.score = ScoreTracker(device="cpu" if device == "auto" else device)
         self.trainer = Trainer(models_dir=models_dir, device=device)
 
+        from ml.tracknet import TrackNetDetector
+        tracknet_model = os.path.join(models_dir, "tracknet_v2.pt")
+        self.tracknet = TrackNetDetector(
+            model_path=tracknet_model if os.path.exists(tracknet_model) else None,
+            device=device,
+        )
+
         self._initialised = True
         logger.info("All ML modules initialised")
         return {"status": "ok"}
@@ -159,6 +166,72 @@ class BridgeServer:
             batch = [_decode_frame(f) for f in frames_data]
 
         return self.detector.detect_batch(batch)
+
+    # ---- RPC: tracknet_batch ----------------------------------------------
+
+    def rpc_tracknet_batch(self, params: dict) -> Any:
+        """Run TrackNet ball detection on a batch of frames.
+
+        Reads frames from shared memory (same layout as rpc_detect_batch),
+        builds background reference on first call, assembles every-other-frame
+        diff triplets [N-4, N-2, N] starting at index 4, and returns per-frame
+        ball detections.
+
+        Returns:
+            List of {"frame_index": int, "ball": {"x": float, "y": float,
+            "confidence": float} | null}
+        """
+        self._require_init()
+
+        frames_data = params.get("frames", [])
+        if not frames_data:
+            return []
+
+        shm_path = params.get("shm_path")
+        if shm_path:
+            batch = []
+            with open(shm_path, "rb") as f:
+                for meta in frames_data:
+                    f.seek(meta["offset"])
+                    raw = f.read(meta["size"])
+                    arr = np.frombuffer(raw, dtype=np.uint8).reshape(
+                        (meta["height"], meta["width"], 3)
+                    )
+                    # frombuffer returns a read-only array — make a writable copy
+                    batch.append(arr.copy())
+        else:
+            batch = [_decode_frame(f) for f in frames_data]
+
+        from ml.tracknet import BackgroundSubtractor
+
+        # Build background reference from first ~30 frames on first call
+        if not hasattr(self, "_bg_subtractor") or self._bg_subtractor is None:
+            self._bg_subtractor = BackgroundSubtractor()
+        if not self._bg_subtractor.is_ready:
+            ref_frames = batch[:30] if len(batch) >= 30 else batch
+            self._bg_subtractor.build_reference(ref_frames)
+
+        # Background-subtract every frame
+        subtracted = [self._bg_subtractor.subtract(f) for f in batch]
+
+        # Build every-other-frame diff triplets: for frame indices 4, 6, 8…
+        # take [N-4, N-2, N] from the subtracted list
+        results = []
+        for i in range(len(subtracted)):
+            if i < 4:
+                results.append({"frame_index": i, "ball": None})
+                continue
+            # Only produce a detection on even-stride positions (i >= 4 and
+            # (i - 4) % 2 == 0), matching the TrackNet temporal design.
+            if (i - 4) % 2 != 0:
+                results.append({"frame_index": i, "ball": None})
+                continue
+            triplet = [subtracted[i - 4], subtracted[i - 2], subtracted[i]]
+            detections = self.tracknet.detect_batch([triplet])
+            ball = detections[0] if detections else None
+            results.append({"frame_index": i, "ball": ball})
+
+        return results
 
     # ---- RPC: detect_court ------------------------------------------------
 
@@ -269,6 +342,7 @@ class BridgeServer:
         handlers = {
             "__init__": self.rpc_init,
             "detect_batch": self.rpc_detect_batch,
+            "tracknet_batch": self.rpc_tracknet_batch,
             "detect_court": self.rpc_detect_court,
             "classify_strokes": self.rpc_classify_strokes,
             "analyze_placements": self.rpc_analyze_placements,
