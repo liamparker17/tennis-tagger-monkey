@@ -174,6 +174,16 @@ class Detector:
                                 "confidence": conf,
                             }
 
+            # Keep only the 2 largest players by bbox area.
+            # In broadcast tennis footage, the actual players have the largest
+            # bounding boxes; ball kids, umpires, and crowd are smaller.
+            if len(players) > 2:
+                players.sort(
+                    key=lambda p: (p["bbox"][2] - p["bbox"][0]) * (p["bbox"][3] - p["bbox"][1]),
+                    reverse=True,
+                )
+                players = players[:2]
+
             if ball is not None:
                 cx = (ball["bbox"][0] + ball["bbox"][2]) / 2
                 cy = (ball["bbox"][1] + ball["bbox"][3]) / 2
