@@ -31,7 +31,7 @@ _BALL_MAX_PX = 100
 
 # Default confidence thresholds
 _PLAYER_CONF = 0.5
-_BALL_CONF = 0.3
+_BALL_CONF = 0.2
 
 
 class Detector:
@@ -116,7 +116,9 @@ class Detector:
         if self.model is None or len(frames) == 0:
             return self._fallback(frames)
 
-        min_conf = min(_PLAYER_CONF, _BALL_CONF)
+        # Use ball threshold as minimum conf (lower than player threshold).
+        # Players are filtered at _PLAYER_CONF in the post-processing loop below.
+        min_conf = _BALL_CONF
 
         try:
             predict_kwargs = dict(
