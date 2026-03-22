@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/liamp/tennis-tagger/internal/bridge"
+	"github.com/liamp/tennis-tagger/internal/point"
 	"github.com/liamp/tennis-tagger/internal/video"
 )
 
@@ -16,10 +17,11 @@ type frameBatch struct {
 	StartFrame int
 }
 
-// detectionBatch carries detection results and their starting frame index through the pipeline.
+// detectionBatch carries detection results, ball positions, and their starting frame index through the pipeline.
 type detectionBatch struct {
-	Detections []bridge.DetectionResult
-	StartFrame int
+	Detections    []bridge.DetectionResult
+	BallPositions []bridge.BallPosition
+	StartFrame    int
 }
 
 // ProcessConcurrent runs the full analysis pipeline using a 3-stage concurrent architecture.
@@ -155,8 +157,17 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 				}
 			}
 
+			// Run TrackNet on the same frames for dedicated ball detection.
+			trackNetPositions, trackErr := p.bridge.TrackNetBatch(bFrames)
+			if trackErr != nil {
+				slog.Warn("TrackNet batch failed, using YOLO ball only", "frame", fb.StartFrame, "error", trackErr)
+			}
+
+			// Merge TrackNet + YOLO ball positions for this batch.
+			ballPositions := mergeBallPositions(detections, trackNetPositions, fb.StartFrame)
+
 			select {
-			case detCh <- detectionBatch{Detections: detections, StartFrame: fb.StartFrame}:
+			case detCh <- detectionBatch{Detections: detections, BallPositions: ballPositions, StartFrame: fb.StartFrame}:
 			case <-ctx.Done():
 				return
 			}
@@ -166,6 +177,7 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 	// --- Stage 3: Tracking + assembly (main goroutine) ---
 	for db := range detCh {
 		result.Detections = append(result.Detections, db.Detections...)
+		result.BallPositions = append(result.BallPositions, db.BallPositions...)
 
 		for _, det := range db.Detections {
 			tracked := p.tracker.Update(det.Players)
@@ -221,8 +233,88 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 	}
 	result.Placements = placements
 
+	// 6. Fit trajectories
+	p.progress.Stage = "trajectory_fitting"
+	if len(result.BallPositions) > 0 {
+		trajectories, err := p.bridge.FitTrajectories(result.BallPositions, result.Court, meta.FPS)
+		if err != nil {
+			slog.Warn("trajectory fitting failed", "error", err)
+		} else {
+			result.Trajectories = trajectories
+		}
+	}
+
+	// 7. Segment shots (pure Go)
+	if len(result.Trajectories) > 0 {
+		result.Shots = point.SegmentShots(result.Trajectories)
+	}
+
+	// 8. Recognize points + track score (pure Go)
+	if len(result.Shots) > 0 {
+		shotGroups := groupShotsIntoPoints(result.Shots, meta.FPS)
+		points, score := point.RecognizePoints(shotGroups, 0) // 0 = near player serves first (default)
+		result.Points = points
+		result.MatchScore = score
+	}
+
 	p.progress.Stage = "complete"
 	p.progress.Percent = 100
 
 	return result, nil
+}
+
+// mergeBallPositions combines TrackNet ball positions with YOLO ball detections.
+// For each frame, if YOLO detected a ball, a BallPosition is created from it.
+// TrackNet positions are included as-is. When both sources detect a ball on
+// the same frame, both are kept (downstream trajectory fitting can weight them).
+func mergeBallPositions(detections []bridge.DetectionResult, trackNet []bridge.BallPosition, startFrame int) []bridge.BallPosition {
+	var merged []bridge.BallPosition
+
+	// Add TrackNet positions.
+	merged = append(merged, trackNet...)
+
+	// Add YOLO ball detections as BallPositions.
+	for _, det := range detections {
+		if det.Ball != nil {
+			cx := (det.Ball.X1 + det.Ball.X2) / 2
+			cy := (det.Ball.Y1 + det.Ball.Y2) / 2
+			merged = append(merged, bridge.BallPosition{
+				X:          cx,
+				Y:          cy,
+				Confidence: det.Ball.Confidence,
+				FrameIndex: det.FrameIndex,
+				Source:     "yolo",
+			})
+		}
+	}
+
+	return merged
+}
+
+// groupShotsIntoPoints splits a sequence of shots into groups, where each
+// group represents one point. A gap of more than 3 seconds (measured in
+// frames) between consecutive shots starts a new group.
+func groupShotsIntoPoints(shots []point.Shot, fps float64) [][]point.Shot {
+	if len(shots) == 0 {
+		return nil
+	}
+	gapFrames := int(fps * 3) // 3-second gap = new point
+	if gapFrames <= 0 {
+		gapFrames = 90 // fallback for unknown FPS
+	}
+
+	var groups [][]point.Shot
+	current := []point.Shot{shots[0]}
+
+	for i := 1; i < len(shots); i++ {
+		if shots[i].StartFrame-shots[i-1].EndFrame > gapFrames {
+			groups = append(groups, current)
+			current = []point.Shot{shots[i]}
+		} else {
+			current = append(current, shots[i])
+		}
+	}
+	groups = append(groups, current)
+
+	return groups
 }

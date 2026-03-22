@@ -67,6 +67,16 @@ func (b *EmbeddedBridge) DetectCourt(frame Frame) (CourtData, error) {
 	return CourtData{}, errors.New("EmbeddedBridge.DetectCourt: not yet implemented")
 }
 
+// TrackNetBatch runs TrackNet ball detection on a batch of frames.
+func (b *EmbeddedBridge) TrackNetBatch(frames []Frame) ([]BallPosition, error) {
+	return nil, errors.New("EmbeddedBridge.TrackNetBatch: not yet implemented")
+}
+
+// FitTrajectories sends ball positions to the trajectory fitter.
+func (b *EmbeddedBridge) FitTrajectories(positions []BallPosition, court CourtData, fps float64) ([]TrajectoryResult, error) {
+	return nil, errors.New("EmbeddedBridge.FitTrajectories: not yet implemented")
+}
+
 // TrainModel starts a training run.
 func (b *EmbeddedBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) error {
 	return errors.New("EmbeddedBridge.TrainModel: not yet implemented")

@@ -158,6 +158,13 @@ type BridgeBackend interface {
 	// DetectCourt detects the court in a single frame.
 	DetectCourt(frame Frame) (CourtData, error)
 
+	// TrackNetBatch runs TrackNet ball detection on a batch of frames.
+	TrackNetBatch(frames []Frame) ([]BallPosition, error)
+
+	// FitTrajectories sends ball positions to the trajectory fitter and returns
+	// fitted trajectory segments with bounce detection and in/out calls.
+	FitTrajectories(positions []BallPosition, court CourtData, fps float64) ([]TrajectoryResult, error)
+
 	// TrainModel starts a training run with the given video-CSV pairs and config.
 	TrainModel(pairs []TrainingPair, config TrainingConfig) error
 

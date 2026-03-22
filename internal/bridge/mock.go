@@ -114,6 +114,44 @@ func (m *MockBridge) DetectCourt(frame Frame) (CourtData, error) {
 	}, nil
 }
 
+// TrackNetBatch returns one ball position per frame with mock coordinates.
+func (m *MockBridge) TrackNetBatch(frames []Frame) ([]BallPosition, error) {
+	var positions []BallPosition
+	for i := range frames {
+		positions = append(positions, BallPosition{
+			X:          305,
+			Y:          255,
+			Confidence: 0.8,
+			FrameIndex: i,
+			Source:      "tracknet",
+		})
+	}
+	return positions, nil
+}
+
+// FitTrajectories returns one trajectory spanning all positions with a mock bounce.
+func (m *MockBridge) FitTrajectories(positions []BallPosition, court CourtData, fps float64) ([]TrajectoryResult, error) {
+	if len(positions) == 0 {
+		return nil, nil
+	}
+	return []TrajectoryResult{
+		{
+			StartFrame: positions[0].FrameIndex,
+			EndFrame:   positions[len(positions)-1].FrameIndex,
+			Bounces: []Bounce{
+				{
+					FrameIndex: positions[len(positions)/2].FrameIndex,
+					CX:         0.5,
+					CY:         0.3,
+					InOut:      "in",
+				},
+			},
+			SpeedKPH:   120.0,
+			Confidence: 0.85,
+		},
+	}, nil
+}
+
 // TrainModel is a no-op that returns nil.
 func (m *MockBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) error {
 	return nil

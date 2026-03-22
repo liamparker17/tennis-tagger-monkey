@@ -9,6 +9,7 @@ import (
 
 	"github.com/liamp/tennis-tagger/internal/bridge"
 	"github.com/liamp/tennis-tagger/internal/config"
+	"github.com/liamp/tennis-tagger/internal/point"
 	"github.com/liamp/tennis-tagger/internal/tracker"
 	"github.com/liamp/tennis-tagger/internal/video"
 )
@@ -25,6 +26,11 @@ type Result struct {
 	Rallies         []bridge.RallyResult
 	Placements      []bridge.PlacementResult
 	Strokes         []bridge.StrokeResult
+	BallPositions   []bridge.BallPosition
+	Trajectories    []bridge.TrajectoryResult
+	Shots           []point.Shot
+	Points          []point.Point
+	MatchScore      *point.MatchState
 }
 
 // ProgressInfo reports the current state of pipeline processing.
