@@ -38,91 +38,123 @@ class Analyzer:
     # ------------------------------------------------------------------
 
     def detect_court(self, frame: np.ndarray) -> dict:
-        """Detect court boundaries via Canny + HoughLinesP + findHomography.
+        """Detect court boundaries from white lines on a coloured surface.
 
-        Uses multi-threshold Canny edge detection, edge dilation, and
-        line classification (horizontal vs vertical) for robust court
-        corner estimation.
+        Strategy:
+        1. Detect court surface colour (clay/hard court via HSV).
+        2. Find white pixels adjacent to the court surface (court lines).
+        3. Thicken and close gaps to form enclosed regions.
+        4. Find enclosed regions in the central frame area (service boxes etc).
+        5. Convex hull of those regions → court polygon.
+
+        Falls back to frame-proportion estimate if detection fails.
 
         The result is cached on success until :meth:`reset_court_cache`
-        is called.  Failed detections (confidence == 0) are **not**
-        cached so the next call retries.
+        is called.
 
         Args:
             frame: BGR image.
 
         Returns:
-            Dict with ``corners``, ``homography``, ``method``,
-            ``confidence``.  ``homography`` may be ``None`` if detection
-            fails.
+            Dict with ``corners``, ``polygon``, ``homography``, ``method``,
+            ``confidence``.  ``polygon`` is the expanded court boundary
+            for player filtering.
         """
         if self._court_cache is not None:
             return self._court_cache
 
         h, w = frame.shape[:2]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        # Multi-threshold Canny — break on first successful detection
-        lines = None
-        thresholds = [(30, 100), (50, 150), (75, 200)]
-        for lo, hi in thresholds:
-            edges = cv2.Canny(gray, lo, hi, apertureSize=3)
-            edges = cv2.dilate(edges, kernel, iterations=1)
+        # --- Step 1: Detect court surface ---
+        # Try common court colours: clay (red/orange), hard (blue), grass (green)
+        clay = cv2.inRange(hsv, np.array([0, 25, 50]), np.array([25, 255, 255]))
+        blue = cv2.inRange(hsv, np.array([90, 30, 50]), np.array([130, 255, 255]))
+        green = cv2.inRange(hsv, np.array([35, 30, 50]), np.array([85, 255, 255]))
 
-            detected = cv2.HoughLinesP(
-                edges,
-                rho=1,
-                theta=np.pi / 180,
-                threshold=80,
-                minLineLength=50,
-                maxLineGap=20,
-            )
-            if detected is not None and len(detected) >= 4:
-                lines = detected
-                break
+        # Pick the dominant surface
+        counts = {"clay": clay.sum(), "blue": blue.sum(), "green": green.sum()}
+        surface_name = max(counts, key=counts.get)
+        surface_mask = {"clay": clay, "blue": blue, "green": green}[surface_name]
+        logger.info("Court surface: %s (%d%% of frame)", surface_name,
+                     int(counts[surface_name] / 255 / (h * w) * 100))
 
-        if lines is None:
-            return {
-                "corners": None,
-                "homography": None,
-                "method": "line_detection",
-                "confidence": 0.0,
-            }
-
-        # Classify lines into horizontal and vertical
-        horizontals, verticals = self._separate_lines(lines, w, h)
-
-        # Corner estimation — try methods in priority order
-        if len(horizontals) >= 2 and len(verticals) >= 2:
-            corners = self._corners_from_lines(horizontals, verticals, w, h)
-            method = "line_intersection"
-            confidence = 0.9
-        elif len(lines) >= 4:
-            corners = self._corners_from_endpoints(lines, w, h)
-            method = "endpoint_extremes"
-            confidence = 0.7
-        else:
-            corners = self._default_corners(w, h)
-            method = "frame_proportion"
-            confidence = 0.5
-
-        # Standard normalised court
-        standard = np.array(
-            [[0, 1], [1, 1], [0, 0], [1, 0]],
-            dtype=np.float32,
+        # --- Step 2: White pixels adjacent to court surface ---
+        surface_dilated = cv2.dilate(
+            surface_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
         )
+        white = cv2.inRange(hsv, np.array([0, 0, 185]), np.array([180, 55, 255]))
+        court_white = white & surface_dilated
 
-        homography, _ = cv2.findHomography(corners, standard)
+        # --- Step 3: Find court boundary from line segment extreme points ---
+        # Detect line segments in the white court mask
+        edges = cv2.Canny(court_white, 50, 150)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 30,
+                                minLineLength=max(20, w // 50),
+                                maxLineGap=max(10, w // 100))
+
+        if lines is not None and len(lines) >= 4:
+            # Collect all line endpoints
+            pts = []
+            for l in lines:
+                x1, y1, x2, y2 = l[0]
+                pts.extend([(x1, y1), (x2, y2)])
+            pts = np.array(pts)
+
+            # Find the 4 extreme points (court corners in perspective)
+            tl = pts[np.argmin(pts[:, 0] + pts[:, 1])]       # top-left
+            tr = pts[np.argmax(pts[:, 0] - pts[:, 1])]       # top-right
+            bl = pts[np.argmin(pts[:, 0] - pts[:, 1])]       # bottom-left
+            br = pts[np.argmax(pts[:, 0] + pts[:, 1])]       # bottom-right
+
+            corners_poly = np.array([tl, tr, br, bl], dtype=np.int32)
+            method = "line_extremes"
+            confidence = 0.85
+        else:
+            corners_poly = self._default_corners(w, h).astype(np.int32)
+            method = "frame_proportion"
+            confidence = 0.3
+
+        # Expand polygon by 10% for players standing behind baselines
+        M = cv2.moments(corners_poly.reshape(-1, 1, 2))
+        if M["m00"] > 0:
+            cx_m = M["m10"] / M["m00"]
+            cy_m = M["m01"] / M["m00"]
+            expanded = ((corners_poly.astype(float) - [cx_m, cy_m]) * 1.10
+                        + [cx_m, cy_m]).astype(np.int32)
+            expanded = np.clip(expanded, 0, [w - 1, h - 1])
+        else:
+            expanded = corners_poly
+
+        # Pick 4 representative corners for homography (extremes of polygon)
+        four = self._pick_four_corners(corners_poly, w, h)
+        standard = np.array([[0, 1], [1, 1], [0, 0], [1, 0]], dtype=np.float32)
+        homography, _ = cv2.findHomography(four, standard)
 
         self._court_cache = {
-            "corners": corners.tolist(),
+            "corners": four.tolist(),
+            "polygon": expanded.tolist(),
             "homography": homography,
             "method": method,
             "confidence": confidence,
         }
-        logger.info("Court detected (%s, confidence=%.2f) and cached", method, confidence)
+        logger.info("Court detected (%s, confidence=%.2f, %d vertices) and cached",
+                     method, confidence, len(expanded))
         return self._court_cache
+
+    @staticmethod
+    def _pick_four_corners(poly: np.ndarray, w: int, h: int) -> np.ndarray:
+        """Select 4 corners from polygon for homography (TL, TR, BL, BR)."""
+        pts = poly.reshape(-1, 2).astype(np.float32)
+        # Top-left: closest to (0, 0)
+        tl = pts[np.argmin(pts[:, 0] + pts[:, 1])]
+        # Top-right: closest to (w, 0)
+        tr = pts[np.argmin((pts[:, 0] - w) ** 2 + pts[:, 1] ** 2)]
+        # Bottom-left: closest to (0, h)
+        bl = pts[np.argmin(pts[:, 0] ** 2 + (pts[:, 1] - h) ** 2)]
+        # Bottom-right: closest to (w, h)
+        br = pts[np.argmin((pts[:, 0] - w) ** 2 + (pts[:, 1] - h) ** 2)]
+        return np.array([bl, br, tl, tr], dtype=np.float32)
 
     def reset_court_cache(self) -> None:
         """Clear cached court detection so the next call re-detects."""

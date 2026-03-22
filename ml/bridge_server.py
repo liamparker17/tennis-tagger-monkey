@@ -163,10 +163,27 @@ class BridgeServer:
     # ---- RPC: detect_court ------------------------------------------------
 
     def rpc_detect_court(self, params: dict) -> Any:
-        """Detect court boundaries in a single frame."""
+        """Detect court boundaries in a single frame.
+
+        Also sets the court polygon on the detector for on-court
+        player filtering in subsequent detect_batch calls.
+        The court frame may be at native resolution while detection
+        frames are at 640px — the polygon is scaled accordingly.
+        """
         self._require_init()
         frame = _decode_frame(params["frame"])
         result = self.analyzer.detect_court(frame)
+        # Set court polygon on detector, scaled to 640px detection width
+        polygon = result.get("polygon")
+        if polygon is not None:
+            court_w = frame.shape[1]
+            det_w = 640  # detection frames are always 640px wide
+            if court_w != det_w and court_w > 0:
+                scale = det_w / court_w
+                scaled = [[int(p[0] * scale), int(p[1] * scale)] for p in polygon]
+                self.detector.set_court_polygon(scaled)
+            else:
+                self.detector.set_court_polygon(polygon)
         # homography is a numpy array — will be serialised via _json_default
         return result
 

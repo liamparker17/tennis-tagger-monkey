@@ -9,10 +9,12 @@ type Frame struct {
 
 // VideoMeta holds metadata about a video file.
 type VideoMeta struct {
-	Path        string
-	FPS         float64
-	Width       int
-	Height      int
-	TotalFrames int
-	Duration    float64 // seconds
+	Path         string
+	FPS          float64
+	Width        int // Scaled output width (640px for detection)
+	Height       int // Scaled output height
+	NativeWidth  int // Original video width
+	NativeHeight int // Original video height
+	TotalFrames  int
+	Duration     float64 // seconds
 }

@@ -103,12 +103,14 @@ func Open(path string) (*VideoReader, error) {
 
 	return &VideoReader{
 		meta: VideoMeta{
-			Path:        path,
-			FPS:         fps,
-			Width:       outWidth,
-			Height:      outHeight,
-			TotalFrames: totalFrames,
-			Duration:    duration,
+			Path:         path,
+			FPS:          fps,
+			Width:        outWidth,
+			Height:       outHeight,
+			NativeWidth:  vs.Width,
+			NativeHeight: vs.Height,
+			TotalFrames:  totalFrames,
+			Duration:     duration,
 		},
 	}, nil
 }
@@ -141,7 +143,7 @@ func (vr *VideoReader) ExtractBatch(start, count int) ([]Frame, error) {
 		"-frames:v", strconv.Itoa(count),
 		"-vf", "scale=640:-2",
 		"-f", "rawvideo",
-		"-pix_fmt", "rgb24",
+		"-pix_fmt", "bgr24",
 		"-v", "error",
 		"pipe:1",
 	)
@@ -179,6 +181,48 @@ func (vr *VideoReader) ExtractBatch(start, count int) ([]Frame, error) {
 	}
 
 	return frames, nil
+}
+
+// ExtractNative extracts a single frame at native resolution (no downscale).
+// Used for court detection where higher resolution improves line detection.
+func (vr *VideoReader) ExtractNative(frameIdx int) (Frame, error) {
+	seekSec := 0.0
+	if vr.meta.FPS > 0 {
+		seekSec = float64(frameIdx) / vr.meta.FPS
+	}
+
+	cmd := exec.Command(
+		"ffmpeg",
+		"-ss", fmt.Sprintf("%.6f", seekSec),
+		"-i", vr.meta.Path,
+		"-frames:v", "1",
+		"-f", "rawvideo",
+		"-pix_fmt", "bgr24",
+		"-v", "error",
+		"pipe:1",
+	)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return Frame{}, fmt.Errorf("ffmpeg native extract: %w: %s", err, stderr.String())
+	}
+
+	frameSize := vr.meta.NativeWidth * vr.meta.NativeHeight * 3
+	raw := stdout.Bytes()
+	if len(raw) < frameSize {
+		return Frame{}, fmt.Errorf("incomplete native frame: got %d, expected %d", len(raw), frameSize)
+	}
+
+	data := make([]byte, frameSize)
+	copy(data, raw[:frameSize])
+	return Frame{
+		Data:   data,
+		Width:  vr.meta.NativeWidth,
+		Height: vr.meta.NativeHeight,
+	}, nil
 }
 
 // Close releases resources held by the VideoReader.

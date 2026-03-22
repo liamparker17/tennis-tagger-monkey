@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # COCO class IDs
 CLASS_PERSON = 0
 CLASS_SPORTS_BALL = 32
+CLASS_TENNIS_RACKET = 38
 
 # Ball size filter (pixels) — tennis balls are small
 _BALL_MIN_PX = 5
@@ -32,6 +33,7 @@ _BALL_MAX_PX = 100
 # Default confidence thresholds
 _PLAYER_CONF = 0.5
 _BALL_CONF = 0.2
+_RACKET_CONF = 0.2
 
 
 class Detector:
@@ -43,7 +45,8 @@ class Detector:
 
     BACKENDS = ("yolo", "rtdetr")
 
-    def __init__(self, model_path: str, device: str = "auto", backend: str = "yolo"):
+    def __init__(self, model_path: str, device: str = "auto", backend: str = "yolo",
+                 court_polygon: Optional[np.ndarray] = None):
         """Load YOLO model and warm up.
 
         Args:
@@ -59,6 +62,9 @@ class Detector:
         self.model: Optional[object] = None
         self.device = "cpu"
         self.ball_history: deque = deque(maxlen=30)
+        self.court_polygon: Optional[np.ndarray] = None
+        if court_polygon is not None:
+            self.court_polygon = np.array(court_polygon, dtype=np.int32).reshape(-1, 1, 2)
 
         if not _YOLO_OK:
             logger.warning("ultralytics not installed — detector disabled")
@@ -94,6 +100,15 @@ class Detector:
         except Exception:
             logger.exception("Failed to load YOLO model")
             self.model = None
+
+    def set_court_polygon(self, polygon: list) -> None:
+        """Set the court polygon for on-court player filtering.
+
+        Args:
+            polygon: List of [x, y] points defining the court boundary.
+        """
+        self.court_polygon = np.array(polygon, dtype=np.int32).reshape(-1, 1, 2)
+        logger.info("Court polygon set (%d vertices)", len(polygon))
 
     # ------------------------------------------------------------------
     # Public API
@@ -172,7 +187,9 @@ class Detector:
             if ball is None and crop_ball is not None:
                 ball = crop_ball
 
-            # Keep only the 2 largest players by bbox area
+            # Filter to on-court players only, then keep top 2 by area
+            if self.court_polygon is not None and len(players) > 2:
+                players = [p for p in players if self._is_on_court(p)]
             if len(players) > 2:
                 players.sort(
                     key=lambda p: (p["bbox"][2] - p["bbox"][0]) * (p["bbox"][3] - p["bbox"][1]),
@@ -228,6 +245,16 @@ class Detector:
                         }
 
         return players, ball
+
+    def _is_on_court(self, det: dict) -> bool:
+        """Check if a player's feet are inside the court polygon."""
+        if self.court_polygon is None:
+            return True
+        bx = det["bbox"]
+        # Bottom-center of bbox ≈ feet position
+        foot_x = (bx[0] + bx[2]) / 2
+        foot_y = bx[3]
+        return cv2.pointPolygonTest(self.court_polygon, (foot_x, foot_y), False) >= 0
 
     @staticmethod
     def _overlaps_any(det: dict, existing: list[dict], iou_thresh: float = 0.3) -> bool:

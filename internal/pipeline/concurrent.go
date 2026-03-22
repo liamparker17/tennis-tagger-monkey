@@ -44,14 +44,21 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 		FPS:         meta.FPS,
 	}
 
-	// 2. Detect court from first frame
+	// 2. Detect court from first frame at native resolution
+	// Native res gives clearer court lines for detection.
+	// The bridge scales the resulting polygon to match detection frame size.
 	p.progress.Stage = "court_detection"
-	firstFrames, err := vr.ExtractBatch(0, 1)
+	nativeFrame, err := vr.ExtractNative(0)
 	if err != nil {
-		return nil, fmt.Errorf("extract first frame: %w", err)
+		slog.Warn("Native frame extraction failed, using scaled frame", "error", err)
+		// Fallback to scaled frame
+		firstFrames, err2 := vr.ExtractBatch(0, 1)
+		if err2 == nil && len(firstFrames) > 0 {
+			nativeFrame = firstFrames[0]
+		}
 	}
-	if len(firstFrames) > 0 {
-		bridgeFrame := videoFrameToBridgeFrame(firstFrames[0])
+	if nativeFrame.Data != nil {
+		bridgeFrame := videoFrameToBridgeFrame(nativeFrame)
 		court, err := p.bridge.DetectCourt(bridgeFrame)
 		if err != nil {
 			return nil, fmt.Errorf("detect court: %w", err)
