@@ -235,6 +235,7 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 
 	// 6. Fit trajectories
 	p.progress.Stage = "trajectory_fitting"
+	slog.Info("Ball detection summary", "tracknet_and_yolo", len(result.BallPositions), "total_frames", len(result.Detections))
 	if len(result.BallPositions) > 0 {
 		trajectories, err := p.bridge.FitTrajectories(result.BallPositions, result.Court, meta.FPS)
 		if err != nil {
@@ -256,6 +257,8 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 		result.Points = points
 		result.MatchScore = score
 	}
+
+	slog.Info("Analysis complete", "trajectories", len(result.Trajectories), "shots", len(result.Shots), "points", len(result.Points))
 
 	p.progress.Stage = "complete"
 	p.progress.Percent = 100

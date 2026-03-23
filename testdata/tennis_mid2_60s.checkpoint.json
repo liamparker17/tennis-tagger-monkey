@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "video_path": "testdata/tennis_mid2_60s.mp4",
+  "processed_frames": 1024,
+  "total_frames": 1800
+}
