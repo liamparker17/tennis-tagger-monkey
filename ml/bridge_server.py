@@ -217,16 +217,11 @@ class BridgeServer:
         # Background-subtract every frame
         subtracted = [self._bg_subtractor.subtract(f) for f in batch]
 
-        # Build every-other-frame diff triplets: for frame indices 4, 6, 8…
-        # take [N-4, N-2, N] from the subtracted list
+        # Build diff triplets for every frame >= 4 using [i-4, i-2, i]
+        # (triplet indices still skip by 2, matching TrackNet's temporal design)
         results = []
         for i in range(len(subtracted)):
             if i < 4:
-                results.append({"frame_index": i, "ball": None})
-                continue
-            # Only produce a detection on even-stride positions (i >= 4 and
-            # (i - 4) % 2 == 0), matching the TrackNet temporal design.
-            if (i - 4) % 2 != 0:
                 results.append({"frame_index": i, "ball": None})
                 continue
             triplet = [subtracted[i - 4], subtracted[i - 2], subtracted[i]]
