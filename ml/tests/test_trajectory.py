@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from ml.trajectory import TrajectoryFitter, deduplicate_detections, is_same_shot
+from ml.trajectory import TrajectoryFitter, deduplicate_detections, is_same_shot, segment_detections
 
 
 def _identity_homography():
@@ -128,3 +128,52 @@ class TestIsSameShot:
         tail = _make_detections([100, 110, 120], [200, 180, 160], [10, 11, 12])
         head = _make_detections([140, 150, 160], [160, 180, 200], [92, 93, 94])
         assert is_same_shot(tail, head, fps=30.0) is False
+
+
+class TestSegmentDetections:
+    """Test gap-aware trajectory segmentation."""
+
+    def test_single_continuous_segment(self):
+        """Detections with no gaps → one segment."""
+        dets = _make_detections(
+            xs=[100, 110, 120, 130, 140],
+            ys=[200, 195, 190, 185, 180],
+            frames=[0, 1, 2, 3, 4],
+        )
+        segments = segment_detections(dets, fps=30.0)
+        assert len(segments) == 1
+        assert len(segments[0]) == 5
+
+    def test_large_gap_splits(self):
+        """A gap of 20 frames should split into two segments."""
+        dets = _make_detections(
+            xs=[100, 110, 120, 300, 310, 320],
+            ys=[200, 195, 190, 200, 195, 190],
+            frames=[0, 1, 2, 22, 23, 24],
+        )
+        segments = segment_detections(dets, fps=30.0)
+        assert len(segments) == 2
+        assert len(segments[0]) == 3
+        assert len(segments[1]) == 3
+
+    def test_deduplicates_first(self):
+        """Same-frame duplicates should be removed before segmenting."""
+        dets = [
+            {"x": 100.0, "y": 200.0, "confidence": 0.5, "frame_index": 0},
+            {"x": 105.0, "y": 200.0, "confidence": 0.9, "frame_index": 0},
+            {"x": 110.0, "y": 195.0, "confidence": 0.8, "frame_index": 1},
+        ]
+        segments = segment_detections(dets, fps=30.0)
+        assert len(segments) == 1
+        assert segments[0][0]["confidence"] == 0.9
+        assert len(segments[0]) == 2
+
+    def test_empty_input(self):
+        segments = segment_detections([], fps=30.0)
+        assert segments == []
+
+    def test_single_detection(self):
+        dets = _make_detections([100], [200], [0])
+        segments = segment_detections(dets, fps=30.0)
+        assert len(segments) == 1
+        assert len(segments[0]) == 1

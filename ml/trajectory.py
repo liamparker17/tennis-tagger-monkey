@@ -142,6 +142,43 @@ def is_same_shot(
     return gap_frames <= _FALLBACK_GAP_FRAMES
 
 
+def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
+    """Split detections into shot segments using gap analysis and velocity checks.
+
+    1. Deduplicate (keep highest confidence per frame)
+    2. Sort by frame_index
+    3. Split at gaps > _MIN_GAP_FRAMES where is_same_shot returns False
+    """
+    if not detections:
+        return []
+
+    cleaned = deduplicate_detections(detections)
+    if not cleaned:
+        return []
+
+    cleaned.sort(key=lambda d: d["frame_index"])
+
+    segments: List[List[dict]] = []
+    current: List[dict] = [cleaned[0]]
+
+    for i in range(1, len(cleaned)):
+        gap = cleaned[i]["frame_index"] - cleaned[i - 1]["frame_index"]
+
+        if gap <= _MIN_GAP_FRAMES:
+            current.append(cleaned[i])
+        else:
+            tail = current[-min(3, len(current)):]
+            head = cleaned[i:i + min(3, len(cleaned) - i)]
+            if is_same_shot(tail, head, fps):
+                current.append(cleaned[i])
+            else:
+                segments.append(current)
+                current = [cleaned[i]]
+
+    segments.append(current)
+    return segments
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------

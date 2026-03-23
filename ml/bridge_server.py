@@ -404,30 +404,24 @@ class BridgeServer:
     # ---- RPC: fit_trajectories --------------------------------------------
 
     def rpc_fit_trajectories(self, params: dict) -> Any:
-        """Fit ball trajectories from a sequence of ball position detections.
+        """Fit ball trajectories from ball position detections.
 
-        Input params:
-            ball_positions: list of {x, y, confidence, frameIndex}
-            court: {homography: [[3x3 matrix]]}
-            fps: float
-
-        Returns list of trajectory dicts (see ml.trajectory.Trajectory.to_dict).
+        Segments detections into individual shots, then fits one trajectory
+        per segment.
         """
-        from ml.trajectory import TrajectoryFitter
+        from ml.trajectory import TrajectoryFitter, segment_detections
 
         ball_positions = params.get("ball_positions", [])
         court = params.get("court", {})
         fps = float(params.get("fps", 30.0))
 
-        # Extract homography — accept both nested list and flat list-of-lists
         homography_raw = court.get("homography", [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
         homography = np.array(homography_raw, dtype=float)
 
         if homography.shape != (3, 3):
             raise ValueError(f"homography must be 3x3, got shape {homography.shape}")
 
-        # Normalise detection key names: Go sends camelCase (frameIndex),
-        # Python internally uses snake_case (frame_index).
+        # Normalise key names: Go sends camelCase, Python uses snake_case
         detections = []
         for bp in ball_positions:
             detections.append({
@@ -440,13 +434,19 @@ class BridgeServer:
         if not detections:
             return []
 
+        # Segment into individual shots
+        segments = segment_detections(detections, fps)
+        logger.info("Segmented %d detections into %d segments", len(detections), len(segments))
+
+        # Fit one trajectory per segment
         fitter = TrajectoryFitter(homography, fps)
-        traj = fitter.fit(detections)
+        trajectories = []
+        for seg in segments:
+            traj = fitter.fit(seg)
+            if traj is not None:
+                trajectories.append(traj.to_dict())
 
-        if traj is None:
-            return []
-
-        return [traj.to_dict()]
+        return trajectories
 
     # ---- Internal ---------------------------------------------------------
 
