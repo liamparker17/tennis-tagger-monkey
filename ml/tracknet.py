@@ -468,7 +468,8 @@ class TrackNetDetector:
                 else:
                     # TrackNetV2: 1-channel sigmoid heatmap
                     hmap = output[i, 0].cpu().numpy()  # (H, W) in [0, 1]
-                results.append(self._peak_detect(hmap))
+                threshold = 0.3 if self._is_classifier else _PEAK_THRESHOLD
+                results.append(self._peak_detect(hmap, threshold=threshold))
             return results
         except Exception:
             logger.warning("TrackNet detect_batch failed", exc_info=True)
