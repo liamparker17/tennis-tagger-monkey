@@ -34,6 +34,15 @@ _BOUNCE_VELOCITY_THRESHOLD = 2.0
 _MIN_BOUNCE_GAP = 0.10
 
 
+# Segmentation parameters
+_MIN_GAP_FRAMES = 5
+_ADAPTIVE_MULTIPLIER = 5.0
+_MAX_MERGE_GAP_FRAMES = 75
+_FALLBACK_GAP_FRAMES = 15  # used when < 2 points to estimate velocity
+_G_EFF_MIN = 500.0   # min plausible effective gravity (px/s^2)
+_G_EFF_MAX = 3000.0   # max plausible effective gravity (px/s^2)
+
+
 def deduplicate_detections(detections: List[dict]) -> List[dict]:
     """Keep one detection per frame_index, choosing the highest confidence.
 
@@ -49,6 +58,88 @@ def deduplicate_detections(detections: List[dict]) -> List[dict]:
         if fi not in best or d["confidence"] > best[fi]["confidence"]:
             best[fi] = d
     return sorted(best.values(), key=lambda d: d["frame_index"])
+
+
+def _estimate_exit_velocity(detections: List[dict], fps: float) -> Optional[tuple]:
+    """Estimate (vx, vy) in pixels/s from the last two detections (exit velocity)."""
+    if len(detections) < 2:
+        return None
+    d0, d1 = detections[-2], detections[-1]
+    dt = (d1["frame_index"] - d0["frame_index"]) / fps
+    if dt <= 0:
+        return None
+    return ((d1["x"] - d0["x"]) / dt, (d1["y"] - d0["y"]) / dt)
+
+
+def _estimate_entry_velocity(detections: List[dict], fps: float) -> Optional[tuple]:
+    """Estimate (vx, vy) in pixels/s from the first two detections (entry velocity)."""
+    if len(detections) < 2:
+        return None
+    d0, d1 = detections[0], detections[1]
+    dt = (d1["frame_index"] - d0["frame_index"]) / fps
+    if dt <= 0:
+        return None
+    return ((d1["x"] - d0["x"]) / dt, (d1["y"] - d0["y"]) / dt)
+
+
+def is_same_shot(
+    tail: List[dict],
+    head: List[dict],
+    fps: float,
+    max_merge_gap: int = _MAX_MERGE_GAP_FRAMES,
+) -> bool:
+    """Determine if two detection segments belong to the same shot arc.
+
+    Args:
+        tail: Last few detections of the previous segment.
+        head: First few detections of the next segment.
+        fps:  Frames per second.
+        max_merge_gap: Never merge across gaps larger than this (frames).
+
+    Returns:
+        True if likely the same shot (ball went off-screen and came back),
+        False if likely a new shot (opponent returned the ball).
+    """
+    if not tail or not head:
+        return False
+
+    gap_frames = head[0]["frame_index"] - tail[-1]["frame_index"]
+
+    # Hard cap: never merge across very large gaps
+    if gap_frames > max_merge_gap:
+        return False
+
+    exit_vel = _estimate_exit_velocity(tail, fps)
+    entry_vel = _estimate_entry_velocity(head, fps)
+
+    # Fallback: not enough points to estimate velocity
+    if exit_vel is None or entry_vel is None:
+        return gap_frames <= _FALLBACK_GAP_FRAMES
+
+    exit_vx, exit_vy = exit_vel
+    entry_vx, entry_vy = entry_vel
+
+    # Signal 1: horizontal direction should be approximately the same
+    # (both moving right, or both moving left)
+    if abs(exit_vx) > 5 and abs(entry_vx) > 5:
+        if (exit_vx > 0) != (entry_vx > 0):
+            return False  # horizontal reversal = new shot
+
+    # Signal 2: vertical consistency — ball should exit upward (vy < 0 in
+    # pixel coords where y increases downward) and re-enter downward (vy > 0)
+    if exit_vy < 0 and entry_vy > 0:
+        # Consistent parabola: up then down
+        # Signal 3: check if gap duration is plausible for a parabolic arc
+        # Expected time off-screen ≈ 2 * |vy_exit| / g_eff
+        # Use midpoint of plausible g_eff range as estimate
+        g_est = (_G_EFF_MIN + _G_EFF_MAX) / 2.0
+        expected_gap_s = 2.0 * abs(exit_vy) / g_est
+        actual_gap_s = gap_frames / fps
+        if actual_gap_s <= expected_gap_s * 2.5:
+            return True
+
+    # Default: if gap is small enough, assume same shot
+    return gap_frames <= _FALLBACK_GAP_FRAMES
 
 
 # ---------------------------------------------------------------------------

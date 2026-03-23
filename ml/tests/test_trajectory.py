@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from ml.trajectory import TrajectoryFitter, deduplicate_detections
+from ml.trajectory import TrajectoryFitter, deduplicate_detections, is_same_shot
 
 
 def _identity_homography():
@@ -93,3 +93,38 @@ class TestDeduplicateDetections:
 
     def test_empty_input(self):
         assert deduplicate_detections([]) == []
+
+
+class TestIsSameShot:
+    """Velocity-based shot boundary detection."""
+
+    def test_same_direction_parabola_is_same_shot(self):
+        # Ball exits going right and up, re-enters going right and down
+        tail = _make_detections([100, 110, 120], [200, 180, 160], [10, 11, 12])
+        head = _make_detections([140, 150, 160], [160, 180, 200], [20, 21, 22])
+        assert is_same_shot(tail, head, fps=30.0) is True
+
+    def test_reversed_horizontal_is_new_shot(self):
+        # Ball exits going right, re-enters going left
+        tail = _make_detections([100, 110, 120], [200, 180, 160], [10, 11, 12])
+        head = _make_detections([500, 490, 480], [160, 180, 200], [20, 21, 22])
+        assert is_same_shot(tail, head, fps=30.0) is False
+
+    def test_too_few_points_uses_gap_threshold(self):
+        # Only 1 point in tail — can't estimate velocity
+        tail = _make_detections([100], [200], [10])
+        head = _make_detections([200], [200], [30])
+        # Gap = 20 frames > 15 frame fallback threshold
+        assert is_same_shot(tail, head, fps=30.0) is False
+
+    def test_too_few_points_short_gap_is_same(self):
+        tail = _make_detections([100], [200], [10])
+        head = _make_detections([200], [200], [14])
+        # Gap = 4 frames < 15 frame fallback threshold
+        assert is_same_shot(tail, head, fps=30.0) is True
+
+    def test_gap_exceeds_max_merge_is_new_shot(self):
+        # Even with consistent direction, gap of 80 frames (>75) = new shot
+        tail = _make_detections([100, 110, 120], [200, 180, 160], [10, 11, 12])
+        head = _make_detections([140, 150, 160], [160, 180, 200], [92, 93, 94])
+        assert is_same_shot(tail, head, fps=30.0) is False
