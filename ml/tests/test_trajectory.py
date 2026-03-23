@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from ml.trajectory import TrajectoryFitter, deduplicate_detections, is_same_shot, segment_detections
+from ml.trajectory import Trajectory, TrajectoryFitter, deduplicate_detections, is_same_shot, segment_detections
 
 
 def _identity_homography():
@@ -177,3 +177,41 @@ class TestSegmentDetections:
         segments = segment_detections(dets, fps=30.0)
         assert len(segments) == 1
         assert len(segments[0]) == 1
+
+
+class TestSpeedValidation:
+    """Test speed sanity clamping."""
+
+    def test_valid_rally_speed_is_kept(self):
+        fitter = TrajectoryFitter(_identity_homography(), fps=30.0)
+        # Identity H maps pixels to normalised [0,1] then scales by court dims.
+        # Use small increments so court-plane speed stays in valid range.
+        # 0.1 pixel/frame → ~0.82m/frame at 8.23m court width → 24.7 m/s → 89 km/h
+        dets = _make_detections(
+            xs=[0.5, 0.6, 0.7, 0.8, 0.9],
+            ys=[0.5, 0.5, 0.5, 0.5, 0.5],
+            frames=[0, 1, 2, 3, 4],
+        )
+        traj = fitter.fit(dets)
+        assert traj is not None
+        assert traj.speed_valid is True
+        assert traj.speed_kph > 20.0
+
+    def test_impossibly_fast_speed_is_clamped(self):
+        fitter = TrajectoryFitter(_identity_homography(), fps=30.0)
+        # Moving 100m per frame at 30fps = 10800 km/h (impossible)
+        dets = _make_detections(
+            xs=[0, 100, 200, 300, 400],
+            ys=[0, 0, 0, 0, 0],
+            frames=[0, 1, 2, 3, 4],
+        )
+        traj = fitter.fit(dets)
+        assert traj is not None
+        assert traj.speed_valid is False
+        assert traj.speed_kph == 0.0
+
+    def test_speed_valid_in_to_dict(self):
+        t = Trajectory(start_frame=0, end_frame=10, speed_valid=False)
+        d = t.to_dict()
+        assert "speedValid" in d
+        assert d["speedValid"] is False

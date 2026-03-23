@@ -198,6 +198,7 @@ class Trajectory:
     cy0: float = 0.0                # fitted y-intercept (m)
     vy: float = 0.0                 # fitted y-velocity (m/s)
     g_eff: float = 0.0              # effective gravity (pixels/s^2), 0 = linear fit used
+    speed_valid: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -212,6 +213,7 @@ class Trajectory:
             "cy0": self.cy0,
             "vy": self.vy,
             "gEff": self.g_eff,
+            "speedValid": self.speed_valid,
         }
 
 
@@ -420,6 +422,13 @@ class TrajectoryFitter:
         speed_ms = float(np.sqrt(vx ** 2 + vy ** 2))
         speed_kph = speed_ms * 3.6
 
+        # Speed sanity clamping
+        _MAX_SPEED_KPH = 300.0
+        _MIN_SPEED_KPH = 5.0
+        speed_valid = _MIN_SPEED_KPH <= speed_kph <= _MAX_SPEED_KPH
+        if not speed_valid:
+            speed_kph = 0.0
+
         return Trajectory(
             start_frame=int(detections[0]["frame_index"]),
             end_frame=int(detections[-1]["frame_index"]),
@@ -431,4 +440,5 @@ class TrajectoryFitter:
             vx=vx,
             cy0=cy0,
             vy=vy,
+            speed_valid=speed_valid,
         )
