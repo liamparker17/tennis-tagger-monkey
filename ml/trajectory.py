@@ -34,6 +34,23 @@ _BOUNCE_VELOCITY_THRESHOLD = 2.0
 _MIN_BOUNCE_GAP = 0.10
 
 
+def deduplicate_detections(detections: List[dict]) -> List[dict]:
+    """Keep one detection per frame_index, choosing the highest confidence.
+
+    YOLO and TrackNet may both detect the ball on the same frame. Duplicates
+    on the same frame_index corrupt the rolling-median gap calculation in
+    segment_detections(), so they must be removed first.
+    """
+    if not detections:
+        return []
+    best: dict[int, dict] = {}
+    for d in detections:
+        fi = d["frame_index"]
+        if fi not in best or d["confidence"] > best[fi]["confidence"]:
+            best[fi] = d
+    return sorted(best.values(), key=lambda d: d["frame_index"])
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -52,6 +69,7 @@ class Trajectory:
     vx: float = 0.0                 # fitted x-velocity (m/s)
     cy0: float = 0.0                # fitted y-intercept (m)
     vy: float = 0.0                 # fitted y-velocity (m/s)
+    g_eff: float = 0.0              # effective gravity (pixels/s^2), 0 = linear fit used
 
     def to_dict(self) -> dict:
         return {
@@ -65,6 +83,7 @@ class Trajectory:
             "vx": self.vx,
             "cy0": self.cy0,
             "vy": self.vy,
+            "gEff": self.g_eff,
         }
 
 
@@ -141,7 +160,7 @@ class TrajectoryFitter:
 
         A bounce is signalled by a sign change or sharp deceleration in the
         cy component of velocity.  Returns list of
-        ``{"frame_index": int, "cx": float, "cy": float}``.
+        ``{"frameIndex": int, "cx": float, "cy": float}``.
         """
         if len(detections) < _MIN_DETECTIONS:
             return []
@@ -179,7 +198,7 @@ class TrajectoryFitter:
                 cx_b = float((cx_arr[i] + cx_arr[i + 1]) / 2) if i + 1 < len(cx_arr) else float(cx_arr[i])
                 cy_b = float((cy_arr[i] + cy_arr[i + 1]) / 2) if i + 1 < len(cy_arr) else float(cy_arr[i])
                 bounces.append({
-                    "frame_index": int(detections[i]["frame_index"]),
+                    "frameIndex": int(detections[i]["frame_index"]),
                     "cx": cx_b,
                     "cy": cy_b,
                 })
@@ -263,10 +282,10 @@ class TrajectoryFitter:
         for b in raw_bounces:
             in_out = self.classify_landing(b["cx"], b["cy"])
             bounces_with_inout.append({
-                "frame_index": b["frame_index"],
+                "frameIndex": b["frameIndex"],
                 "cx": b["cx"],
                 "cy": b["cy"],
-                "in_out": in_out,
+                "inOut": in_out,
             })
 
         # Speed estimate: 2-D court-plane speed in km/h
