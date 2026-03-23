@@ -54,3 +54,42 @@ class TestTrajectoryDataclass:
         d = t.to_dict()
         assert "gEff" in d
         assert d["gEff"] == 1500.0
+
+
+class TestDeduplicateDetections:
+    def test_no_duplicates_unchanged(self):
+        dets = _make_detections([1, 2, 3], [4, 5, 6], [0, 1, 2])
+        result = deduplicate_detections(dets)
+        assert len(result) == 3
+
+    def test_same_frame_keeps_higher_confidence(self):
+        dets = [
+            {"x": 10.0, "y": 20.0, "confidence": 0.5, "frame_index": 5},
+            {"x": 12.0, "y": 22.0, "confidence": 0.9, "frame_index": 5},
+        ]
+        result = deduplicate_detections(dets)
+        assert len(result) == 1
+        assert result[0]["confidence"] == 0.9
+        assert result[0]["x"] == 12.0
+
+    def test_three_on_same_frame(self):
+        dets = [
+            {"x": 1.0, "y": 1.0, "confidence": 0.3, "frame_index": 0},
+            {"x": 2.0, "y": 2.0, "confidence": 0.8, "frame_index": 0},
+            {"x": 3.0, "y": 3.0, "confidence": 0.5, "frame_index": 0},
+        ]
+        result = deduplicate_detections(dets)
+        assert len(result) == 1
+        assert result[0]["confidence"] == 0.8
+
+    def test_preserves_order_by_frame(self):
+        dets = [
+            {"x": 1.0, "y": 1.0, "confidence": 0.9, "frame_index": 10},
+            {"x": 2.0, "y": 2.0, "confidence": 0.9, "frame_index": 5},
+        ]
+        result = deduplicate_detections(dets)
+        assert result[0]["frame_index"] == 5
+        assert result[1]["frame_index"] == 10
+
+    def test_empty_input(self):
+        assert deduplicate_detections([]) == []
