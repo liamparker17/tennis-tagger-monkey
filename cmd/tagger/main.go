@@ -18,12 +18,18 @@ func main() {
 	pythonPath := flag.String("python", "python", "Path to Python executable")
 	liveSource := flag.String("live", "", "Live source (webcam index or RTSP URL)")
 	retrain := flag.Bool("retrain", false, "Retrain model from accumulated corrections")
+	courtCorners := flag.String("court-corners", "", "Manual court corners: x1,y1,x2,y2,x3,y3,x4,y4 (TL,TR,BL,BR pixel coords)")
 	flag.Parse()
 
 	cfg, err := config.Load("")
 	if err != nil {
 		slog.Error("Failed to load config", "error", err)
 		os.Exit(1)
+	}
+
+	if *courtCorners != "" {
+		slog.Info("Manual court corners provided", "corners", *courtCorners)
+		cfg.CourtCorners = *courtCorners
 	}
 
 	var b bridge.BridgeBackend

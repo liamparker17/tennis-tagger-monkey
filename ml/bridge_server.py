@@ -273,26 +273,61 @@ class BridgeServer:
     def rpc_detect_court(self, params: dict) -> Any:
         """Detect court boundaries in a single frame.
 
-        Also sets the court polygon on the detector for on-court
-        player filtering in subsequent detect_batch calls.
-        The court frame may be at native resolution while detection
-        frames are at 640px — the polygon is scaled accordingly.
+        If detection returns an identity (or near-identity) homography,
+        substitutes a broadcast fallback derived from standard court
+        dimensions and typical broadcast camera position.
         """
         self._require_init()
         frame = _decode_frame(params["frame"])
         result = self.analyzer.detect_court(frame)
-        # Set court polygon on detector, scaled to 640px detection width
+
+        # Check if homography is identity or near-identity (detection failed)
+        homography = result.get("homography")
+        if homography is not None:
+            H = np.array(homography, dtype=float)
+            if H.shape == (3, 3) and np.allclose(H, np.eye(3), atol=1e-4):
+                logger.warning("Court detection returned identity homography, using broadcast fallback")
+                result = self._broadcast_fallback(frame.shape[1], frame.shape[0], result)
+        elif homography is None:
+            logger.warning("Court detection returned no homography, using broadcast fallback")
+            result = self._broadcast_fallback(frame.shape[1], frame.shape[0], result)
+
+        # Set court polygon on detector for player filtering
         polygon = result.get("polygon")
         if polygon is not None:
             court_w = frame.shape[1]
-            det_w = 640  # detection frames are always 640px wide
+            det_w = 640
             if court_w != det_w and court_w > 0:
                 scale = det_w / court_w
                 scaled = [[int(p[0] * scale), int(p[1] * scale)] for p in polygon]
                 self.detector.set_court_polygon(scaled)
             else:
                 self.detector.set_court_polygon(polygon)
-        # homography is a numpy array — will be serialised via _json_default
+        return result
+
+    @staticmethod
+    def _broadcast_fallback(width: int, height: int, result: dict) -> dict:
+        """Compute a fallback homography for standard broadcast camera angle.
+
+        Assumes camera is centered behind one baseline, ~10m high, ~5m back.
+        Maps approximate court corner pixels to normalised [0,1] court coords.
+        """
+        import cv2
+
+        w, h = float(width), float(height)
+        src = np.float32([
+            [w * 0.25, h * 0.17],   # top-left court corner
+            [w * 0.75, h * 0.17],   # top-right court corner
+            [w * 0.125, h * 0.94],  # bottom-left court corner
+            [w * 0.875, h * 0.94],  # bottom-right court corner
+        ])
+        dst = np.float32([[0, 0], [1, 0], [0, 1], [1, 1]])
+
+        H, _ = cv2.findHomography(src, dst)
+        result["homography"] = H.tolist()
+        result["method"] = "broadcast_fallback"
+        result["confidence"] = 0.3
+        result["corners"] = src.tolist()
         return result
 
     # ---- RPC: classify_strokes --------------------------------------------

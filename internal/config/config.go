@@ -15,6 +15,7 @@ type Config struct {
 	Export        ExportConfig   `yaml:"export"`
 	Training      TrainingConfig `yaml:"training"`
 	ActiveModel   string         `yaml:"activeModel"`
+	CourtCorners  string         `yaml:"courtCorners"`
 }
 
 // PipelineConfig holds pipeline-specific settings.
