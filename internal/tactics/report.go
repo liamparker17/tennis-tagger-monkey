@@ -10,10 +10,11 @@ import (
 
 // TacticalReport holds the complete tactical analysis for a match.
 type TacticalReport struct {
-	MatchSummary string         `json:"match_summary"`
-	Duration     string         `json:"duration"`
-	TotalRallies int            `json:"total_rallies"`
-	Players      []PlayerReport `json:"players"`
+	MatchSummary   string         `json:"match_summary"`
+	Duration       string         `json:"duration"`
+	TotalRallies   int            `json:"total_rallies"`
+	BallDetections int            `json:"ball_detections"`
+	Players        []PlayerReport `json:"players"`
 }
 
 // PlayerReport holds tactical data for a single player within a report.
@@ -24,16 +25,19 @@ type PlayerReport struct {
 	Tendencies      []string       `json:"tendencies"`
 }
 
-// GenerateReport creates a TacticalReport from analyzed patterns, rally data, and duration.
+// GenerateReport creates a TacticalReport from analyzed patterns, rally data, duration,
+// and the number of frames in which the ball was detected.
 func GenerateReport(
 	patterns []PlayerPattern,
 	rallies []bridge.RallyResult,
 	durationSec float64,
+	ballDetections int,
 ) *TacticalReport {
 	report := &TacticalReport{
-		Duration:     formatDuration(durationSec),
-		TotalRallies: len(rallies),
-		Players:      make([]PlayerReport, len(patterns)),
+		Duration:       formatDuration(durationSec),
+		TotalRallies:   len(rallies),
+		BallDetections: ballDetections,
+		Players:        make([]PlayerReport, len(patterns)),
 	}
 
 	totalStrokes := 0
@@ -41,8 +45,8 @@ func GenerateReport(
 		totalStrokes += p.Strokes.Total
 	}
 
-	report.MatchSummary = fmt.Sprintf("%d rallies, %d total strokes in %s",
-		len(rallies), totalStrokes, report.Duration)
+	report.MatchSummary = fmt.Sprintf("%d rallies, %d total strokes, %d ball detections in %s",
+		len(rallies), totalStrokes, ballDetections, report.Duration)
 
 	for i, p := range patterns {
 		report.Players[i] = PlayerReport{
@@ -61,7 +65,8 @@ func (r *TacticalReport) FormatText() string {
 	var sb strings.Builder
 
 	sb.WriteString("=== TACTICAL REPORT ===\n")
-	sb.WriteString(fmt.Sprintf("Duration: %s | Rallies: %d\n", r.Duration, r.TotalRallies))
+	sb.WriteString(fmt.Sprintf("Duration: %s | Rallies: %d | Ball detections: %d\n",
+		r.Duration, r.TotalRallies, r.BallDetections))
 
 	for _, player := range r.Players {
 		sb.WriteString(fmt.Sprintf("\n--- %s ---\n", player.Label))

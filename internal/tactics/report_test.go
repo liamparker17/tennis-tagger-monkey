@@ -36,7 +36,7 @@ func TestGenerateReport_Basic(t *testing.T) {
 		{StartFrame: 200, EndFrame: 350, NumStrokes: 3, DurationFrames: 150},
 	}
 
-	report := GenerateReport(patterns, rallies, 120.0)
+	report := GenerateReport(patterns, rallies, 120.0, 42)
 
 	if report.TotalRallies != 2 {
 		t.Errorf("TotalRallies = %d, want 2", report.TotalRallies)
@@ -82,7 +82,7 @@ func TestFormatText_NotEmpty(t *testing.T) {
 		},
 	}
 
-	report := GenerateReport(patterns, nil, 30.0)
+	report := GenerateReport(patterns, nil, 30.0, 0)
 	text := report.FormatText()
 
 	if text == "" {
