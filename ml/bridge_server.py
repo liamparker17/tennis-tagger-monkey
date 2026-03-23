@@ -207,10 +207,12 @@ class BridgeServer:
 
         from ml.tracknet import BackgroundSubtractor
 
-        # Build background reference from first ~30 frames on first call
+        # Build background reference from batch ONLY if not already set
+        # by a prior set_background_reference call
         if not hasattr(self, "_bg_subtractor") or self._bg_subtractor is None:
             self._bg_subtractor = BackgroundSubtractor()
         if not self._bg_subtractor.is_ready:
+            logger.warning("Background reference not pre-set, building from batch (suboptimal)")
             ref_frames = batch[:30] if len(batch) >= 30 else batch
             self._bg_subtractor.build_reference(ref_frames)
 
@@ -230,6 +232,41 @@ class BridgeServer:
             results.append({"frame_index": i, "ball": ball})
 
         return results
+
+    # ---- RPC: set_background_reference ------------------------------------
+
+    def rpc_set_background_reference(self, params: dict) -> Any:
+        """Build background reference from frames sampled across the full video.
+
+        Should be called once before any tracknet_batch calls, typically
+        during the court detection phase.
+        """
+        self._require_init()
+        from ml.tracknet import BackgroundSubtractor
+
+        frames_data = params.get("frames", [])
+        if not frames_data:
+            return {"status": "no_frames"}
+
+        shm_path = params.get("shm_path")
+        if shm_path:
+            batch = []
+            with open(shm_path, "rb") as f:
+                for meta in frames_data:
+                    f.seek(meta["offset"])
+                    raw = f.read(meta["size"])
+                    arr = np.frombuffer(raw, dtype=np.uint8).reshape(
+                        (meta["height"], meta["width"], 3)
+                    )
+                    batch.append(arr.copy())
+        else:
+            batch = [_decode_frame(f) for f in frames_data]
+
+        if not hasattr(self, "_bg_subtractor") or self._bg_subtractor is None:
+            self._bg_subtractor = BackgroundSubtractor()
+        self._bg_subtractor.build_reference(batch)
+        logger.info("Background reference built from %d frames", len(batch))
+        return {"status": "ok", "reference_frames": len(batch)}
 
     # ---- RPC: detect_court ------------------------------------------------
 
@@ -397,6 +434,7 @@ class BridgeServer:
             "get_versions": self.rpc_get_versions,
             "rollback": self.rpc_rollback,
             "fit_trajectories": self.rpc_fit_trajectories,
+            "set_background_reference": self.rpc_set_background_reference,
         }
         handler = handlers.get(method)
         if handler is None:

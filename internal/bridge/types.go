@@ -161,6 +161,9 @@ type BridgeBackend interface {
 	// TrackNetBatch runs TrackNet ball detection on a batch of frames.
 	TrackNetBatch(frames []Frame) ([]BallPosition, error)
 
+	// SetBackgroundReference sends reference frames for TrackNet background subtraction.
+	SetBackgroundReference(frames []Frame) error
+
 	// FitTrajectories sends ball positions to the trajectory fitter and returns
 	// fitted trajectory segments with bounce detection and in/out calls.
 	FitTrajectories(positions []BallPosition, court CourtData, fps float64) ([]TrajectoryResult, error)

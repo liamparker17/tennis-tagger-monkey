@@ -152,6 +152,9 @@ func (m *MockBridge) FitTrajectories(positions []BallPosition, court CourtData, 
 	}, nil
 }
 
+// SetBackgroundReference is a no-op for the mock bridge.
+func (m *MockBridge) SetBackgroundReference(frames []Frame) error { return nil }
+
 // TrainModel is a no-op that returns nil.
 func (m *MockBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) error {
 	return nil

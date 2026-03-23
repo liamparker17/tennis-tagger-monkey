@@ -498,6 +498,44 @@ func (b *ProcessBridge) FitTrajectories(positions []BallPosition, court CourtDat
 	return trajectories, nil
 }
 
+// SetBackgroundReference sends reference frames to the Python bridge for
+// building the TrackNet background subtraction model.
+func (b *ProcessBridge) SetBackgroundReference(frames []Frame) error {
+	if len(frames) == 0 {
+		return nil
+	}
+	if b.shm == nil {
+		var err error
+		b.shm, err = NewSharedMemBuffer(os.TempDir())
+		if err != nil {
+			return fmt.Errorf("SetBackgroundReference: create shm: %w", err)
+		}
+	}
+
+	shmPath, metas, err := b.shm.WriteBatch(frames)
+	if err != nil {
+		return fmt.Errorf("SetBackgroundReference: write shm: %w", err)
+	}
+
+	frameMetas := make([]map[string]interface{}, len(metas))
+	for i, m := range metas {
+		frameMetas[i] = map[string]interface{}{
+			"offset": m.Offset,
+			"width":  m.Width,
+			"height": m.Height,
+			"size":   m.Size,
+		}
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"shm_path": shmPath,
+		"frames":   frameMetas,
+	})
+
+	_, err = b.worker.Call("set_background_reference", payload)
+	return err
+}
+
 // Close releases resources held by the process bridge.
 // Safe to call multiple times.
 func (b *ProcessBridge) Close() {

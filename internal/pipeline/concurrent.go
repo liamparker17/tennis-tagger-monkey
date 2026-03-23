@@ -68,6 +68,33 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 		result.Court = court
 	}
 
+	// 2b. Sample reference frames for TrackNet background subtraction.
+	// Extract 30 frames evenly spaced across the video.
+	{
+		refCount := 30
+		if meta.TotalFrames < refCount {
+			refCount = meta.TotalFrames
+		}
+		step := meta.TotalFrames / refCount
+		if step < 1 {
+			step = 1
+		}
+		var refFrames []bridge.Frame
+		for i := 0; i < meta.TotalFrames && len(refFrames) < refCount; i += step {
+			frames, err := vr.ExtractBatch(i, 1)
+			if err == nil && len(frames) > 0 {
+				refFrames = append(refFrames, videoFrameToBridgeFrame(frames[0]))
+			}
+		}
+		if len(refFrames) > 0 {
+			if err := p.bridge.SetBackgroundReference(refFrames); err != nil {
+				slog.Warn("Failed to set background reference", "error", err)
+			} else {
+				slog.Info("Background reference set", "frames", len(refFrames))
+			}
+		}
+	}
+
 	// 3. Set up pipeline parameters
 	p.progress.Stage = "detection"
 	batchSize := p.config.Pipeline.BatchSize
