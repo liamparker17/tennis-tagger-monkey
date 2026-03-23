@@ -130,6 +130,122 @@ class TrackNetV2(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# BallTrackerNet — architecture matching yastrebksv/TrackNet pre-trained weights
+# ---------------------------------------------------------------------------
+
+
+class _YasConvBlock(nn.Module):
+    """Single Conv3x3 + BN + ReLU matching yastrebksv key layout.
+
+    Weight keys: block.0 = Conv2d, block.1 = ReLU, block.2 = BatchNorm2d.
+    (Original repo uses Conv -> ReLU -> BN ordering.)
+    """
+
+    def __init__(self, in_ch: int, out_ch: int) -> None:
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=True),  # .0
+            nn.ReLU(inplace=True),                                           # .1
+            nn.BatchNorm2d(out_ch),                                          # .2
+        )
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        return self.block(x)
+
+
+class BallTrackerNet(nn.Module):
+    """BallTrackerNet matching yastrebksv/TrackNet architecture exactly.
+
+    This architecture has NO skip connections and uses nn.Upsample instead
+    of ConvTranspose2d.  Output is 256 channels (softmax classification).
+
+    Encoder: 2+2+3+3 conv layers across 4 stages (conv1-10).
+    Decoder: 3+2+2 conv layers across 3 stages (conv11-17).
+    Output:  conv18 (64 -> 256), softmax over 256 classes.
+
+    Pre-trained weights: models/yastrebksv_tracknet.pt (~10.7M params).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Encoder stage 1: 9 -> 64
+        self.conv1 = _YasConvBlock(9, 64)
+        self.conv2 = _YasConvBlock(64, 64)
+        self.pool1 = nn.MaxPool2d(2, 2)
+
+        # Encoder stage 2: 64 -> 128
+        self.conv3 = _YasConvBlock(64, 128)
+        self.conv4 = _YasConvBlock(128, 128)
+        self.pool2 = nn.MaxPool2d(2, 2)
+
+        # Encoder stage 3: 128 -> 256
+        self.conv5 = _YasConvBlock(128, 256)
+        self.conv6 = _YasConvBlock(256, 256)
+        self.conv7 = _YasConvBlock(256, 256)
+        self.pool3 = nn.MaxPool2d(2, 2)
+
+        # Encoder stage 4 (bottleneck): 256 -> 512
+        self.conv8 = _YasConvBlock(256, 512)
+        self.conv9 = _YasConvBlock(512, 512)
+        self.conv10 = _YasConvBlock(512, 512)
+
+        # Decoder stage 1: 512 -> 256
+        self.up1 = nn.Upsample(scale_factor=2, mode="nearest")
+        self.conv11 = _YasConvBlock(512, 256)
+        self.conv12 = _YasConvBlock(256, 256)
+        self.conv13 = _YasConvBlock(256, 256)
+
+        # Decoder stage 2: 256 -> 128
+        self.up2 = nn.Upsample(scale_factor=2, mode="nearest")
+        self.conv14 = _YasConvBlock(256, 128)
+        self.conv15 = _YasConvBlock(128, 128)
+
+        # Decoder stage 3: 128 -> 64
+        self.up3 = nn.Upsample(scale_factor=2, mode="nearest")
+        self.conv16 = _YasConvBlock(128, 64)
+        self.conv17 = _YasConvBlock(64, 64)
+
+        # Output: 256-class softmax (pixel-wise classification)
+        self.conv18 = _YasConvBlock(64, 256)
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        # Encoder
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.pool1(x)
+
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.pool2(x)
+
+        x = self.conv5(x)
+        x = self.conv6(x)
+        x = self.conv7(x)
+        x = self.pool3(x)
+
+        x = self.conv8(x)
+        x = self.conv9(x)
+        x = self.conv10(x)
+
+        # Decoder (no skip connections)
+        x = self.up1(x)
+        x = self.conv11(x)
+        x = self.conv12(x)
+        x = self.conv13(x)
+
+        x = self.up2(x)
+        x = self.conv14(x)
+        x = self.conv15(x)
+
+        x = self.up3(x)
+        x = self.conv16(x)
+        x = self.conv17(x)
+
+        x = self.conv18(x)
+        return x  # (B, 256, H, W) — raw logits, softmax applied in post-processing
+
+
+# ---------------------------------------------------------------------------
 # Background subtraction
 # ---------------------------------------------------------------------------
 
@@ -242,19 +358,34 @@ class TrackNetDetector:
 
         self._device = torch.device(self.device_str)
 
+        self._is_classifier = False  # True if using 256-class output model
+
         # Build and optionally load model
         try:
-            self.model = TrackNetV2().to(self._device)
-            self.model.eval()
-
             if model_path is not None:
-                state = torch.load(model_path, map_location=self._device)
-                # Accept both raw state_dicts and checkpoint dicts
-                if isinstance(state, dict) and "model_state_dict" in state:
-                    state = state["model_state_dict"]
-                self.model.load_state_dict(state)
-                logger.info("TrackNet: loaded weights from %s", model_path)
+                # Try loading as BallTrackerNet (yastrebksv architecture) first
+                try:
+                    state = torch.load(model_path, map_location=self._device, weights_only=True)
+                    if isinstance(state, dict) and "model_state_dict" in state:
+                        state = state["model_state_dict"]
+                    test_model = BallTrackerNet().to(self._device)
+                    test_model.load_state_dict(state)
+                    self.model = test_model
+                    self.model.eval()
+                    self._is_classifier = True
+                    logger.info("TrackNet: loaded BallTrackerNet weights from %s", model_path)
+                except (RuntimeError, KeyError):
+                    # Fall back to our TrackNetV2 architecture
+                    self.model = TrackNetV2().to(self._device)
+                    self.model.eval()
+                    state = torch.load(model_path, map_location=self._device, weights_only=True)
+                    if isinstance(state, dict) and "model_state_dict" in state:
+                        state = state["model_state_dict"]
+                    self.model.load_state_dict(state)
+                    logger.info("TrackNet: loaded TrackNetV2 weights from %s", model_path)
             else:
+                self.model = TrackNetV2().to(self._device)
+                self.model.eval()
                 logger.info(
                     "TrackNet: no weights path given — using random weights "
                     "(suitable for testing only)"
@@ -323,11 +454,20 @@ class TrackNetDetector:
             batch = torch.stack(tensors, dim=0).to(self._device)  # (B, 9, H, W)
 
             with torch.no_grad():
-                heatmaps = self.model(batch)  # (B, 1, H, W)
+                output = self.model(batch)
 
             results = []
-            for i in range(heatmaps.shape[0]):
-                hmap = heatmaps[i, 0].cpu().numpy()  # (H, W) float32 in [0, 1]
+            for i in range(output.shape[0]):
+                if self._is_classifier:
+                    # BallTrackerNet: 256-channel output, softmax classification
+                    # Channel 0 = "no ball", channels 1-255 = ball confidence levels
+                    # Take argmax, convert to probability map
+                    probs = torch.softmax(output[i], dim=0)  # (256, H, W)
+                    # Sum all non-background channels for ball probability
+                    hmap = (1.0 - probs[0]).cpu().numpy()  # (H, W), high = ball likely
+                else:
+                    # TrackNetV2: 1-channel sigmoid heatmap
+                    hmap = output[i, 0].cpu().numpy()  # (H, W) in [0, 1]
                 results.append(self._peak_detect(hmap))
             return results
         except Exception:

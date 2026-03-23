@@ -130,7 +130,10 @@ class BridgeServer:
         self.trainer = Trainer(models_dir=models_dir, device=device)
 
         from ml.tracknet import TrackNetDetector
-        tracknet_model = os.path.join(models_dir, "tracknet_v2.pt")
+        # Try pre-trained BallTrackerNet weights first, then TrackNetV2
+        tracknet_model = os.path.join(models_dir, "yastrebksv_tracknet.pt")
+        if not os.path.exists(tracknet_model):
+            tracknet_model = os.path.join(models_dir, "tracknet_v2.pt")
         self.tracknet = TrackNetDetector(
             model_path=tracknet_model if os.path.exists(tracknet_model) else None,
             device=device,
