@@ -220,3 +220,25 @@ func TestSegmentShotsMultiTrajectory(t *testing.T) {
 		}
 	}
 }
+
+// TestSegmentShotsVelocityFallback: when no bounces, use trajectory Vy to determine hitter.
+func TestSegmentShotsVelocityFallback(t *testing.T) {
+	// Trajectory with no bounces but positive Vy (moving toward far baseline)
+	// → near player (0) hit it
+	trajs := []bridge.TrajectoryResult{
+		{StartFrame: 0, EndFrame: 30, Bounces: nil, SpeedKPH: 100.0, Confidence: 0.8, Vy: 5.0},
+		{StartFrame: 31, EndFrame: 60, Bounces: nil, SpeedKPH: 80.0, Confidence: 0.7, Vy: -3.0},
+	}
+	shots := SegmentShots(trajs)
+	if len(shots) != 2 {
+		t.Fatalf("expected 2 shots, got %d", len(shots))
+	}
+	// Vy > 0 → near player (0)
+	if shots[0].Hitter != 0 {
+		t.Errorf("shot 0: expected hitter=0 (vy>0), got %d", shots[0].Hitter)
+	}
+	// Vy < 0 → far player (1)
+	if shots[1].Hitter != 1 {
+		t.Errorf("shot 1: expected hitter=1 (vy<0), got %d", shots[1].Hitter)
+	}
+}

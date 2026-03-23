@@ -135,6 +135,7 @@ type TrajectoryResult struct {
 	Bounces    []Bounce  `json:"bounces"`
 	SpeedKPH   float64   `json:"speedKph"`
 	Confidence float64   `json:"confidence"`
+	Vy         float64   `json:"vy"`
 }
 
 // BridgeBackend defines the interface for ML backend communication.
