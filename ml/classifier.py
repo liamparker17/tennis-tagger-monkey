@@ -6,6 +6,7 @@ Provides Simple3DCNN architecture and StrokeClassifier wrapper.
 """
 
 import logging
+import os
 from typing import Optional
 
 import numpy as np
@@ -187,15 +188,18 @@ class StrokeClassifier:
         else:
             self._model = Simple3DCNN(num_classes=len(STROKE_CLASSES), temporal_depth=CLIP_LENGTH)
 
-        # Try to load weights
+        # Load weights — fail loudly if missing so callers don't get random predictions
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(
+                f"Stroke classifier weights not found at {model_path}. "
+                f"Cannot produce meaningful predictions without trained weights."
+            )
         try:
             state = torch.load(model_path, map_location=self.device, weights_only=True)
             self._model.load_state_dict(state)
             logger.info("Loaded stroke classifier weights from %s", model_path)
-        except FileNotFoundError:
-            logger.warning("Weights not found at %s — using random init", model_path)
-        except Exception:
-            logger.warning("Could not load weights from %s", model_path, exc_info=True)
+        except Exception as exc:
+            raise RuntimeError(f"Could not load weights from {model_path}") from exc
 
         self._model.to(self.device)
         self._model.eval()

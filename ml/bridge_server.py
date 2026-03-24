@@ -128,9 +128,9 @@ class BridgeServer:
         detector_model = os.path.join(models_dir, detector_models.get(detector_backend, "yolov8s.pt"))
         classifier_model = os.path.join(models_dir, classifier_models.get(classifier_name, "stroke_3dcnn.pt"))
 
-        self.detector = Detector(model_path=detector_model, device=device)
+        self.detector = Detector(model_path=detector_model, device=device, backend=detector_backend)
         self.pose = PoseEstimator(device=device)
-        self.classifier = StrokeClassifier(model_path=classifier_model, device=device)
+        self.classifier = StrokeClassifier(model_path=classifier_model, device=device, model_type=classifier_name)
         self.analyzer = Analyzer()
         self.score = ScoreTracker(device="cpu" if device == "auto" else device)
         self.trainer = Trainer(models_dir=models_dir, device=device)
