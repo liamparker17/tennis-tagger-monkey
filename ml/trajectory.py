@@ -25,7 +25,7 @@ CENTER_LINE_X = 4.115       # center of singles court
 CLOSE_CALL_MARGIN = 0.05    # 5 cm
 
 # Minimum detections required to attempt a fit
-_MIN_DETECTIONS = 3
+_MIN_DETECTIONS = 2
 
 # Velocity change threshold (m/s) to classify as a bounce
 _BOUNCE_VELOCITY_THRESHOLD = 2.0
@@ -38,7 +38,8 @@ _MIN_BOUNCE_GAP = 0.10
 _MIN_GAP_FRAMES = 5
 _ADAPTIVE_MULTIPLIER = 5.0
 _MAX_MERGE_GAP_FRAMES = 75
-_FALLBACK_GAP_FRAMES = 15  # used when < 2 points to estimate velocity
+_FALLBACK_GAP_FRAMES_BASE = 15  # base value, scaled up for sparse detection
+_FALLBACK_GAP_FRAMES_MAX = 45   # upper bound for adaptive scaling
 _G_EFF_MIN = 500.0   # min plausible effective gravity (px/s^2)
 _G_EFF_MAX = 3000.0   # max plausible effective gravity (px/s^2)
 
@@ -87,6 +88,7 @@ def is_same_shot(
     head: List[dict],
     fps: float,
     max_merge_gap: int = _MAX_MERGE_GAP_FRAMES,
+    fallback_gap: int = _FALLBACK_GAP_FRAMES_BASE,
 ) -> bool:
     """Determine if two detection segments belong to the same shot arc.
 
@@ -95,6 +97,7 @@ def is_same_shot(
         head: First few detections of the next segment.
         fps:  Frames per second.
         max_merge_gap: Never merge across gaps larger than this (frames).
+        fallback_gap: Gap threshold when velocity can't be estimated.
 
     Returns:
         True if likely the same shot (ball went off-screen and came back),
@@ -114,7 +117,7 @@ def is_same_shot(
 
     # Fallback: not enough points to estimate velocity
     if exit_vel is None or entry_vel is None:
-        return gap_frames <= _FALLBACK_GAP_FRAMES
+        return gap_frames <= fallback_gap
 
     exit_vx, exit_vy = exit_vel
     entry_vx, entry_vy = entry_vel
@@ -139,7 +142,30 @@ def is_same_shot(
             return True
 
     # Default: if gap is small enough, assume same shot
-    return gap_frames <= _FALLBACK_GAP_FRAMES
+    return gap_frames <= fallback_gap
+
+
+def _compute_adaptive_fallback_gap(detections: List[dict], fps: float) -> int:
+    """Compute a fallback gap threshold scaled by detection density.
+
+    Dense detection (most frames have a ball) → use base threshold (15).
+    Sparse detection (ball detected rarely) → scale up to max (45).
+
+    The scaling is: fallback = base * (median_gap / MIN_GAP_FRAMES), clamped.
+    """
+    if len(detections) < 2:
+        return _FALLBACK_GAP_FRAMES_BASE
+
+    gaps = [
+        detections[i]["frame_index"] - detections[i - 1]["frame_index"]
+        for i in range(1, len(detections))
+    ]
+    median_gap = float(sorted(gaps)[len(gaps) // 2])
+
+    # Scale: if median gap is 1 (dense), multiplier ~1x. If median gap is 15, ~3x.
+    scale = max(1.0, median_gap / _MIN_GAP_FRAMES)
+    fallback = int(_FALLBACK_GAP_FRAMES_BASE * scale)
+    return min(fallback, _FALLBACK_GAP_FRAMES_MAX)
 
 
 def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
@@ -147,7 +173,8 @@ def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
 
     1. Deduplicate (keep highest confidence per frame)
     2. Sort by frame_index
-    3. Split at gaps > _MIN_GAP_FRAMES where is_same_shot returns False
+    3. Compute adaptive gap tolerance from detection density
+    4. Split at gaps > _MIN_GAP_FRAMES where is_same_shot returns False
     """
     if not detections:
         return []
@@ -157,6 +184,8 @@ def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
         return []
 
     cleaned.sort(key=lambda d: d["frame_index"])
+
+    fallback_gap = _compute_adaptive_fallback_gap(cleaned, fps)
 
     segments: List[List[dict]] = []
     current: List[dict] = [cleaned[0]]
@@ -169,7 +198,7 @@ def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
         else:
             tail = current[-min(3, len(current)):]
             head = cleaned[i:i + min(3, len(cleaned) - i)]
-            if is_same_shot(tail, head, fps):
+            if is_same_shot(tail, head, fps, fallback_gap=fallback_gap):
                 current.append(cleaned[i])
             else:
                 segments.append(current)

@@ -3,7 +3,11 @@
 import numpy as np
 import pytest
 
-from ml.trajectory import Trajectory, TrajectoryFitter, deduplicate_detections, is_same_shot, segment_detections
+from ml.trajectory import (
+    Trajectory, TrajectoryFitter, deduplicate_detections, is_same_shot,
+    segment_detections, _compute_adaptive_fallback_gap,
+    _FALLBACK_GAP_FRAMES_BASE, _FALLBACK_GAP_FRAMES_MAX,
+)
 
 
 def _identity_homography():
@@ -177,6 +181,71 @@ class TestSegmentDetections:
         segments = segment_detections(dets, fps=30.0)
         assert len(segments) == 1
         assert len(segments[0]) == 1
+
+
+class TestAdaptiveFallbackGap:
+    """Detection-density-aware gap threshold scaling."""
+
+    def test_dense_detection_uses_base(self):
+        # Every frame has a detection → median gap = 1 → base threshold
+        dets = _make_detections(
+            xs=list(range(100, 120)),
+            ys=[200] * 20,
+            frames=list(range(20)),
+        )
+        gap = _compute_adaptive_fallback_gap(dets, fps=30.0)
+        assert gap == _FALLBACK_GAP_FRAMES_BASE
+
+    def test_sparse_detection_scales_up(self):
+        # Detection every 10 frames → median gap = 10 → 2x base
+        dets = _make_detections(
+            xs=[100, 110, 120, 130, 140],
+            ys=[200, 200, 200, 200, 200],
+            frames=[0, 10, 20, 30, 40],
+        )
+        gap = _compute_adaptive_fallback_gap(dets, fps=30.0)
+        assert gap > _FALLBACK_GAP_FRAMES_BASE
+        assert gap <= _FALLBACK_GAP_FRAMES_MAX
+
+    def test_very_sparse_clamps_to_max(self):
+        # Detection every 50 frames → would scale past max
+        dets = _make_detections(
+            xs=[100, 110, 120],
+            ys=[200, 200, 200],
+            frames=[0, 50, 100],
+        )
+        gap = _compute_adaptive_fallback_gap(dets, fps=30.0)
+        assert gap == _FALLBACK_GAP_FRAMES_MAX
+
+    def test_single_detection_uses_base(self):
+        dets = _make_detections([100], [200], [0])
+        gap = _compute_adaptive_fallback_gap(dets, fps=30.0)
+        assert gap == _FALLBACK_GAP_FRAMES_BASE
+
+    def test_sparse_segmentation_merges_fragments(self):
+        """Sparse detection within one shot arc should produce one segment, not many."""
+        # Simulate sparse detection: ball detected every ~8 frames across one shot
+        dets = _make_detections(
+            xs=[100, 108, 116, 124, 132, 140],
+            ys=[200, 195, 190, 185, 180, 175],
+            frames=[0, 8, 16, 24, 32, 40],
+        )
+        segments = segment_detections(dets, fps=30.0)
+        # With adaptive gap, these should stay as one segment
+        assert len(segments) == 1
+
+    def test_two_shot_fit_with_min_detections_2(self):
+        """A 2-detection segment should now produce a valid trajectory."""
+        fitter = TrajectoryFitter(_identity_homography(), fps=30.0)
+        dets = _make_detections(
+            xs=[0.5, 0.6],
+            ys=[0.5, 0.5],
+            frames=[0, 1],
+        )
+        traj = fitter.fit(dets)
+        assert traj is not None
+        assert traj.start_frame == 0
+        assert traj.end_frame == 1
 
 
 class TestSpeedValidation:
