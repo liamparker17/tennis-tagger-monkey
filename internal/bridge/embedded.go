@@ -82,6 +82,11 @@ func (b *EmbeddedBridge) TrainModel(pairs []TrainingPair, config TrainingConfig)
 	return errors.New("EmbeddedBridge.TrainModel: not yet implemented")
 }
 
+// FineTune sends user corrections to the fine-tuning endpoint.
+func (b *EmbeddedBridge) FineTune(corrections []CorrectionData, config TrainingConfig) error {
+	return errors.New("EmbeddedBridge.FineTune: not yet implemented")
+}
+
 // Close releases resources held by the embedded bridge.
 func (b *EmbeddedBridge) Close() {
 	if b.worker != nil {

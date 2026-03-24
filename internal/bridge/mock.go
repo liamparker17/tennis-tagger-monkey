@@ -160,6 +160,11 @@ func (m *MockBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) err
 	return nil
 }
 
+// FineTune is a no-op that returns nil.
+func (m *MockBridge) FineTune(corrections []CorrectionData, config TrainingConfig) error {
+	return nil
+}
+
 // Close is a no-op.
 func (m *MockBridge) Close() {}
 

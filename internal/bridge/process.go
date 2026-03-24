@@ -447,12 +447,21 @@ func (b *ProcessBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) 
 		return fmt.Errorf("TrainModel: marshal: %w", err)
 	}
 
-	// Route to correct Python method based on task
-	method := "train"
-	if config.Task == "fine_tune" {
-		method = "fine_tune"
+	_, err = b.worker.Call("train", payload)
+	return err
+}
+
+// FineTune sends user corrections to the Python fine_tune endpoint.
+func (b *ProcessBridge) FineTune(corrections []CorrectionData, config TrainingConfig) error {
+	payload, err := json.Marshal(map[string]interface{}{
+		"corrections": corrections,
+		"config":      config,
+	})
+	if err != nil {
+		return fmt.Errorf("FineTune: marshal: %w", err)
 	}
-	_, err = b.worker.Call(method, payload)
+
+	_, err = b.worker.Call("fine_tune", payload)
 	return err
 }
 

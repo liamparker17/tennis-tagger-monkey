@@ -120,6 +120,17 @@ type TrainingConfig struct {
 	Device    string `json:"device"`
 }
 
+// CorrectionData holds a user correction in the format expected by the Python
+// fine-tuning endpoint.
+type CorrectionData struct {
+	VideoPath  string `json:"video_path"`
+	FrameIndex int    `json:"frame_index"`
+	Type       string `json:"type"`
+	Original   string `json:"original"`
+	Corrected  string `json:"corrected"`
+	PlayerID   int    `json:"player_id"`
+}
+
 // Bounce holds a single detected ball bounce with court position and in/out call.
 type Bounce struct {
 	FrameIndex int     `json:"frameIndex"`
@@ -171,6 +182,9 @@ type BridgeBackend interface {
 
 	// TrainModel starts a training run with the given video-CSV pairs and config.
 	TrainModel(pairs []TrainingPair, config TrainingConfig) error
+
+	// FineTune sends user corrections to the Python fine-tuning endpoint.
+	FineTune(corrections []CorrectionData, config TrainingConfig) error
 
 	// Close releases all resources held by the backend.
 	Close()

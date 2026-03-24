@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -43,24 +44,20 @@ func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// SelectVideoPath opens a file dialog to select a video file.
-// Returns "" until Wails runtime is wired in.
-// TODO: wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{...})
+// SelectVideoPath is a placeholder for the Wails file dialog.
+// Returns an error string until the desktop UI is implemented.
 func (a *App) SelectVideoPath() string {
+	slog.Warn("SelectVideoPath: desktop UI not yet implemented — use CLI with a file path argument")
 	return ""
 }
 
-// ProcessVideoAsync starts video processing in a background goroutine.
-// TODO: emit wailsRuntime.EventsEmit(a.ctx, "processing-complete") when done
-// TODO: emit wailsRuntime.EventsEmit(a.ctx, "processing-error", err.Error()) on failure
+// ProcessVideoAsync is a placeholder for Wails async processing.
+// Logs a warning and processes synchronously until event emission is wired.
 func (a *App) ProcessVideoAsync(path string) {
-	go func() {
-		if err := a.ProcessVideo(path); err != nil {
-			// TODO: wailsRuntime.EventsEmit(a.ctx, "processing-error", err.Error())
-			return
-		}
-		// TODO: wailsRuntime.EventsEmit(a.ctx, "processing-complete", nil)
-	}()
+	slog.Warn("ProcessVideoAsync: desktop event emission not yet wired — running synchronously")
+	if err := a.ProcessVideo(path); err != nil {
+		slog.Error("ProcessVideoAsync failed", "error", err)
+	}
 }
 
 // GetDeviceInfo returns the configured compute device as a string map.
@@ -178,17 +175,21 @@ func (a *App) TriggerRetrain() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("flush corrections: %w", err)
 	}
 
-	// Convert corrections to training pairs for the bridge
-	pairs := make([]bridge.TrainingPair, len(batch.Corrections))
+	// Convert corrections to bridge correction data for fine-tuning
+	corrData := make([]bridge.CorrectionData, len(batch.Corrections))
 	for i, c := range batch.Corrections {
-		pairs[i] = bridge.TrainingPair{
-			VideoPath: c.VideoPath,
-			CSVPath:   fmt.Sprintf("%s:%s->%s", c.Type, c.Original, c.Corrected),
+		corrData[i] = bridge.CorrectionData{
+			VideoPath:  c.VideoPath,
+			FrameIndex: c.FrameIndex,
+			Type:       c.Type,
+			Original:   c.Original,
+			Corrected:  c.Corrected,
+			PlayerID:   c.PlayerID,
 		}
 	}
 
 	cfg := bridge.TrainingConfig{Task: "fine_tune", Epochs: 5, BatchSize: 16}
-	if err := a.pipeline.Bridge().TrainModel(pairs, cfg); err != nil {
+	if err := a.pipeline.Bridge().FineTune(corrData, cfg); err != nil {
 		return nil, fmt.Errorf("retrain: %w", err)
 	}
 

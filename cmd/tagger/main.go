@@ -18,23 +18,19 @@ func main() {
 	pythonPath := flag.String("python", "python", "Path to Python executable")
 	liveSource := flag.String("live", "", "Live source (webcam index or RTSP URL)")
 	retrain := flag.Bool("retrain", false, "Retrain model from accumulated corrections")
-	courtCorners := flag.String("court-corners", "", "Manual court corners: x1,y1,x2,y2,x3,y3,x4,y4 (TL,TR,BL,BR pixel coords)")
+	configPath := flag.String("config", "", "Path to YAML config file (default: use built-in defaults)")
 	flag.Parse()
 
-	cfg, err := config.Load("")
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		slog.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
 
-	if *courtCorners != "" {
-		slog.Info("Manual court corners provided", "corners", *courtCorners)
-		cfg.CourtCorners = *courtCorners
-	}
-
 	var b bridge.BridgeBackend
 
 	if *useMock {
+		slog.Info("Using MockBridge (--mock flag set)")
 		b = bridge.NewMockBridge()
 	} else {
 		pb := bridge.NewProcessBridge(*pythonPath)
@@ -45,12 +41,12 @@ func main() {
 			ClassifierModel: cfg.Pipeline.ClassifierModel,
 		})
 		if err != nil {
-			slog.Warn("ProcessBridge init failed, falling back to MockBridge", "error", err)
+			slog.Error("ProcessBridge init failed — cannot produce real analysis", "error", err)
+			fmt.Fprintf(os.Stderr, "Error: Python bridge failed to start: %v\nUse --mock for synthetic test data.\n", err)
 			pb.Close()
-			b = bridge.NewMockBridge()
-		} else {
-			b = pb
+			os.Exit(1)
 		}
+		b = pb
 	}
 
 	a := app.NewApp(cfg, b)

@@ -119,8 +119,14 @@ class BridgeServer:
         from ml.score import ScoreTracker
         from ml.trainer import Trainer
 
-        detector_model = os.path.join(models_dir, "yolov8s.pt")
-        classifier_model = os.path.join(models_dir, "stroke_3dcnn.pt")
+        detector_backend = params.get("DetectorBackend", "yolo")
+        classifier_name = params.get("ClassifierModel", "3dcnn")
+
+        detector_models = {"yolo": "yolov8s.pt", "yolov5": "yolov5s.pt"}
+        classifier_models = {"3dcnn": "stroke_3dcnn.pt", "lstm": "stroke_lstm.pt"}
+
+        detector_model = os.path.join(models_dir, detector_models.get(detector_backend, "yolov8s.pt"))
+        classifier_model = os.path.join(models_dir, classifier_models.get(classifier_name, "stroke_3dcnn.pt"))
 
         self.detector = Detector(model_path=detector_model, device=device)
         self.pose = PoseEstimator(device=device)
