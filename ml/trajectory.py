@@ -34,12 +34,17 @@ _BOUNCE_VELOCITY_THRESHOLD = 2.0
 _MIN_BOUNCE_GAP = 0.10
 
 
-# Segmentation parameters
-_MIN_GAP_FRAMES = 5
+# Segmentation parameters (time-based, converted to frames using fps)
+_MIN_GAP_SEC = 0.17              # gaps <= this never trigger split checks
 _ADAPTIVE_MULTIPLIER = 5.0
-_MAX_MERGE_GAP_FRAMES = 75
-_FALLBACK_GAP_FRAMES_BASE = 15  # base value, scaled up for sparse detection
-_FALLBACK_GAP_FRAMES_MAX = 45   # upper bound for adaptive scaling
+_MAX_MERGE_GAP_SEC = 2.5         # hard cap — never merge across this
+_FALLBACK_GAP_SEC_BASE = 0.5     # base value, scaled up for sparse detection
+_FALLBACK_GAP_SEC_MAX = 1.5      # upper bound for adaptive scaling
+
+
+def _sec_to_frames(sec: float, fps: float) -> int:
+    """Convert a time duration in seconds to frame count, minimum 1."""
+    return max(1, int(round(sec * fps)))
 _G_EFF_MIN = 500.0   # min plausible effective gravity (px/s^2)
 _G_EFF_MAX = 3000.0   # max plausible effective gravity (px/s^2)
 
@@ -87,8 +92,8 @@ def is_same_shot(
     tail: List[dict],
     head: List[dict],
     fps: float,
-    max_merge_gap: int = _MAX_MERGE_GAP_FRAMES,
-    fallback_gap: int = _FALLBACK_GAP_FRAMES_BASE,
+    max_merge_gap: Optional[int] = None,
+    fallback_gap: Optional[int] = None,
 ) -> bool:
     """Determine if two detection segments belong to the same shot arc.
 
@@ -105,6 +110,11 @@ def is_same_shot(
     """
     if not tail or not head:
         return False
+
+    if max_merge_gap is None:
+        max_merge_gap = _sec_to_frames(_MAX_MERGE_GAP_SEC, fps)
+    if fallback_gap is None:
+        fallback_gap = _sec_to_frames(_FALLBACK_GAP_SEC_BASE, fps)
 
     gap_frames = head[0]["frame_index"] - tail[-1]["frame_index"]
 
@@ -148,13 +158,17 @@ def is_same_shot(
 def _compute_adaptive_fallback_gap(detections: List[dict], fps: float) -> int:
     """Compute a fallback gap threshold scaled by detection density.
 
-    Dense detection (most frames have a ball) → use base threshold (15).
-    Sparse detection (ball detected rarely) → scale up to max (45).
+    Dense detection (most frames have a ball) → use base threshold.
+    Sparse detection (ball detected rarely) → scale up to max.
 
-    The scaling is: fallback = base * (median_gap / MIN_GAP_FRAMES), clamped.
+    All thresholds are time-based and converted to frames using fps.
     """
+    min_gap = _sec_to_frames(_MIN_GAP_SEC, fps)
+    base = _sec_to_frames(_FALLBACK_GAP_SEC_BASE, fps)
+    maximum = _sec_to_frames(_FALLBACK_GAP_SEC_MAX, fps)
+
     if len(detections) < 2:
-        return _FALLBACK_GAP_FRAMES_BASE
+        return base
 
     gaps = [
         detections[i]["frame_index"] - detections[i - 1]["frame_index"]
@@ -162,10 +176,10 @@ def _compute_adaptive_fallback_gap(detections: List[dict], fps: float) -> int:
     ]
     median_gap = float(sorted(gaps)[len(gaps) // 2])
 
-    # Scale: if median gap is 1 (dense), multiplier ~1x. If median gap is 15, ~3x.
-    scale = max(1.0, median_gap / _MIN_GAP_FRAMES)
-    fallback = int(_FALLBACK_GAP_FRAMES_BASE * scale)
-    return min(fallback, _FALLBACK_GAP_FRAMES_MAX)
+    # Scale: if median gap is 1 (dense), multiplier ~1x. If large, scale up.
+    scale = max(1.0, median_gap / min_gap)
+    fallback = int(base * scale)
+    return min(fallback, maximum)
 
 
 def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
@@ -174,7 +188,7 @@ def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
     1. Deduplicate (keep highest confidence per frame)
     2. Sort by frame_index
     3. Compute adaptive gap tolerance from detection density
-    4. Split at gaps > _MIN_GAP_FRAMES where is_same_shot returns False
+    4. Split at gaps > min_gap where is_same_shot returns False
     """
     if not detections:
         return []
@@ -185,6 +199,7 @@ def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
 
     cleaned.sort(key=lambda d: d["frame_index"])
 
+    min_gap = _sec_to_frames(_MIN_GAP_SEC, fps)
     fallback_gap = _compute_adaptive_fallback_gap(cleaned, fps)
 
     segments: List[List[dict]] = []
@@ -193,7 +208,7 @@ def segment_detections(detections: List[dict], fps: float) -> List[List[dict]]:
     for i in range(1, len(cleaned)):
         gap = cleaned[i]["frame_index"] - cleaned[i - 1]["frame_index"]
 
-        if gap <= _MIN_GAP_FRAMES:
+        if gap <= min_gap:
             current.append(cleaned[i])
         else:
             tail = current[-min(3, len(current)):]

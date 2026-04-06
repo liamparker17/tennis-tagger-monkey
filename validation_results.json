@@ -1,0 +1,224 @@
+[
+  {
+    "point_name": "0-0 (1)",
+    "ground_truth_strokes": "1 to 4",
+    "tagger_shots": 13,
+    "gt_serve_speed": 116,
+    "tagger_serve_speed": 0.0,
+    "gt_server": "Marcos Giron",
+    "gt_point_won": "Marcos Giron",
+    "gt_xy_positions": {
+      "deuce_serve": {
+        "cx": 6.4,
+        "cy": 5.1
+      }
+    },
+    "tagger_positions": [
+      {
+        "cx": -0.02,
+        "cy": 0.0
+      },
+      {
+        "cx": -0.02,
+        "cy": -43.68
+      },
+      {
+        "cx": -0.19,
+        "cy": 6.53
+      },
+      {
+        "cx": -0.04,
+        "cy": 43.21
+      },
+      {
+        "cx": -0.03,
+        "cy": 62.73
+      }
+    ],
+    "notes": [
+      "Way too many shots: 13 >> 4"
+    ]
+  },
+  {
+    "point_name": "15-0 (1)",
+    "ground_truth_strokes": "13+",
+    "tagger_shots": 11,
+    "gt_serve_speed": 109,
+    "tagger_serve_speed": 0.0,
+    "gt_server": "Marcos Giron",
+    "gt_point_won": "Marcos Giron",
+    "gt_xy_positions": {
+      "ad_serve": {
+        "cx": 5.17,
+        "cy": 5.49
+      },
+      "return": {
+        "cx": 2.47,
+        "cy": 7.21
+      },
+      "srv+1": {
+        "cx": 1.05,
+        "cy": 8.24
+      },
+      "last_shot": {
+        "cx": 1.28,
+        "cy": 10.74
+      }
+    },
+    "tagger_positions": [],
+    "notes": [
+      "Too few shots: 11 < 13+",
+      "Tagger split into 3 points (expected 1)"
+    ]
+  },
+  {
+    "point_name": "30-0 (1)",
+    "ground_truth_strokes": "5 to 8",
+    "tagger_shots": 11,
+    "gt_serve_speed": 105,
+    "tagger_serve_speed": 5.9,
+    "gt_server": "Marcos Giron",
+    "gt_point_won": "Camilo Ugo Carabelli",
+    "gt_xy_positions": {
+      "deuce_serve": {
+        "cx": 0.78,
+        "cy": 5.1
+      },
+      "return": {
+        "cx": 4.11,
+        "cy": 8.13
+      },
+      "srv+1": {
+        "cx": 0.69,
+        "cy": 7.02
+      },
+      "last_shot": {
+        "cx": 0.64,
+        "cy": 7.82
+      }
+    },
+    "tagger_positions": [
+      {
+        "cx": 3.54,
+        "cy": 0.0
+      },
+      {
+        "cx": 0.95,
+        "cy": -0.0
+      },
+      {
+        "cx": 1.18,
+        "cy": 0.0
+      },
+      {
+        "cx": 3.07,
+        "cy": 0.0
+      },
+      {
+        "cx": 1.01,
+        "cy": 0.0
+      }
+    ],
+    "notes": [
+      "Speed off by 99 km/h (6 vs 105)",
+      "Tagger split into 2 points (expected 1)"
+    ]
+  },
+  {
+    "point_name": "30-15 (1)",
+    "ground_truth_strokes": "5 to 8",
+    "tagger_shots": 46,
+    "gt_serve_speed": 123,
+    "tagger_serve_speed": 115.9,
+    "gt_server": "Marcos Giron",
+    "gt_point_won": "Marcos Giron",
+    "gt_xy_positions": {
+      "ad_serve": {
+        "cx": 2.1,
+        "cy": 7.21
+      },
+      "return": {
+        "cx": 2.24,
+        "cy": 9.62
+      },
+      "srv+1": {
+        "cx": 2.15,
+        "cy": 9.01
+      },
+      "last_shot": {
+        "cx": 6.17,
+        "cy": 13.0
+      }
+    },
+    "tagger_positions": [
+      {
+        "cx": 0.03,
+        "cy": 155.22
+      },
+      {
+        "cx": 0.02,
+        "cy": 147.14
+      },
+      {
+        "cx": 0.2,
+        "cy": 46.5
+      },
+      {
+        "cx": 0.02,
+        "cy": 147.21
+      },
+      {
+        "cx": 0.31,
+        "cy": 51.36
+      }
+    ],
+    "notes": [
+      "Way too many shots: 46 >> 8"
+    ]
+  },
+  {
+    "point_name": "40-15 (1)",
+    "ground_truth_strokes": "1 to 4",
+    "tagger_shots": 18,
+    "gt_serve_speed": 125,
+    "tagger_serve_speed": 71.8,
+    "gt_server": "Marcos Giron",
+    "gt_point_won": "Marcos Giron",
+    "gt_xy_positions": {
+      "deuce_serve": {
+        "cx": 5.39,
+        "cy": 5.75
+      },
+      "return": {
+        "cx": 0.69,
+        "cy": 14.15
+      }
+    },
+    "tagger_positions": [
+      {
+        "cx": 6.88,
+        "cy": 0.46
+      },
+      {
+        "cx": 5.77,
+        "cy": 20.56
+      },
+      {
+        "cx": 6.28,
+        "cy": 3.47
+      },
+      {
+        "cx": 6.06,
+        "cy": 18.69
+      },
+      {
+        "cx": 5.08,
+        "cy": 35.02
+      }
+    ],
+    "notes": [
+      "Way too many shots: 18 >> 4",
+      "Speed off by 53 km/h (72 vs 125)"
+    ]
+  }
+]

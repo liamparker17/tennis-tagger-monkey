@@ -130,6 +130,128 @@ class TrackNetV2(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# WASBTrackNetV2 — architecture matching nttcom/WASB-SBDT pretrained weights
+# ---------------------------------------------------------------------------
+
+
+class _WASBDoubleConv(nn.Module):
+    """Two Conv3x3 blocks: Conv → ReLU → BN, repeated twice."""
+
+    def __init__(self, in_ch: int, out_ch: int) -> None:
+        super().__init__()
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(out_ch),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(out_ch),
+        )
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        return self.double_conv(x)
+
+
+class _WASBTripleConv(nn.Module):
+    """Three Conv3x3 blocks: Conv → ReLU → BN, repeated three times."""
+
+    def __init__(self, in_ch: int, out_ch: int) -> None:
+        super().__init__()
+        self.triple_conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(out_ch),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(out_ch),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(out_ch),
+        )
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        return self.triple_conv(x)
+
+
+class _WASBDown(nn.Module):
+    """MaxPool then conv block."""
+
+    def __init__(self, in_ch: int, out_ch: int, triple: bool = False) -> None:
+        super().__init__()
+        conv_cls = _WASBTripleConv if triple else _WASBDoubleConv
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2),
+            conv_cls(in_ch, out_ch),
+        )
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        return self.maxpool_conv(x)
+
+
+class _WASBUp(nn.Module):
+    """Bilinear upsample + concat skip + conv block."""
+
+    def __init__(self, in_ch: int, out_ch: int, triple: bool = False) -> None:
+        super().__init__()
+        conv_cls = _WASBTripleConv if triple else _WASBDoubleConv
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        self.conv = conv_cls(in_ch, out_ch)
+
+    def forward(self, x: "torch.Tensor", skip: "torch.Tensor") -> "torch.Tensor":
+        x = self.up(x)
+        # Pad if sizes don't match
+        dh = skip.size(2) - x.size(2)
+        dw = skip.size(3) - x.size(3)
+        if dh != 0 or dw != 0:
+            x = F.pad(x, (0, dw, 0, dh))
+        return self.conv(torch.cat([x, skip], dim=1))
+
+
+class _WASBOutConv(nn.Module):
+    """1x1 conv for final output."""
+
+    def __init__(self, in_ch: int, out_ch: int) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(in_ch, out_ch, 1, bias=True)
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        return self.conv(x)
+
+
+class WASBTrackNetV2(nn.Module):
+    """TrackNetV2 matching the nttcom/WASB-SBDT architecture.
+
+    Input:  (B, 9, H, W)  — 3 BGR frames stacked channel-wise
+    Output: (B, 3, H, W)  — 3 heatmaps (one per input frame), raw logits
+    Resolution: 512x288
+
+    Pretrained weights: models/tracknetv2_tennis_wasb.pt
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.inc = _WASBDoubleConv(9, 64)
+        self.down1 = _WASBDown(64, 128, triple=False)
+        self.down2 = _WASBDown(128, 256, triple=True)
+        self.down3 = _WASBDown(256, 512, triple=True)
+        # Decoder: concat doubles channels, so in_ch = up_ch + skip_ch
+        self.up1 = _WASBUp(512 + 256, 256, triple=True)
+        self.up2 = _WASBUp(256 + 128, 128, triple=False)
+        self.up3 = _WASBUp(128 + 64, 64, triple=False)
+        self.outc = _WASBOutConv(64, 3)
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        e1 = self.inc(x)
+        e2 = self.down1(e1)
+        e3 = self.down2(e2)
+        e4 = self.down3(e3)
+        d3 = self.up1(e4, e3)
+        d2 = self.up2(d3, e2)
+        d1 = self.up3(d2, e1)
+        return self.outc(d1)  # raw logits — caller applies sigmoid
+
+
+# ---------------------------------------------------------------------------
 # BallTrackerNet — architecture matching yastrebksv/TrackNet pre-trained weights
 # ---------------------------------------------------------------------------
 
@@ -359,29 +481,41 @@ class TrackNetDetector:
         self._device = torch.device(self.device_str)
 
         self._is_classifier = False  # True if using 256-class output model
+        self._is_wasb = False        # True if using WASB 3-channel output model
+        self._input_h = 360
+        self._input_w = 640
 
         # Build and optionally load model
         try:
             if model_path is not None:
-                # Try loading as BallTrackerNet (yastrebksv architecture) first
-                try:
-                    state = torch.load(model_path, map_location=self._device, weights_only=True)
-                    if isinstance(state, dict) and "model_state_dict" in state:
-                        state = state["model_state_dict"]
-                    test_model = BallTrackerNet().to(self._device)
-                    test_model.load_state_dict(state)
-                    self.model = test_model
+                state = torch.load(model_path, map_location=self._device, weights_only=True)
+                if isinstance(state, dict) and "model_state_dict" in state:
+                    sd = state["model_state_dict"]
+                else:
+                    sd = state
+
+                # Detect architecture from weight keys
+                if "inc.double_conv.0.weight" in sd and "outc.conv.weight" in sd:
+                    # WASB TrackNetV2 (3-channel output, 512x288)
+                    self.model = WASBTrackNetV2().to(self._device)
+                    self.model.load_state_dict(sd)
+                    self.model.eval()
+                    self._is_wasb = True
+                    self._input_h = 288
+                    self._input_w = 512
+                    logger.info("TrackNet: loaded WASB TrackNetV2 tennis weights from %s", model_path)
+                elif any(k.startswith("conv1.") for k in sd):
+                    # BallTrackerNet (yastrebksv 256-class)
+                    self.model = BallTrackerNet().to(self._device)
+                    self.model.load_state_dict(sd)
                     self.model.eval()
                     self._is_classifier = True
                     logger.info("TrackNet: loaded BallTrackerNet weights from %s", model_path)
-                except (RuntimeError, KeyError):
-                    # Fall back to our TrackNetV2 architecture
+                else:
+                    # Original TrackNetV2 (1-channel output)
                     self.model = TrackNetV2().to(self._device)
+                    self.model.load_state_dict(sd)
                     self.model.eval()
-                    state = torch.load(model_path, map_location=self._device, weights_only=True)
-                    if isinstance(state, dict) and "model_state_dict" in state:
-                        state = state["model_state_dict"]
-                    self.model.load_state_dict(state)
                     logger.info("TrackNet: loaded TrackNetV2 weights from %s", model_path)
             else:
                 self.model = TrackNetV2().to(self._device)
@@ -391,8 +525,8 @@ class TrackNetDetector:
                     "(suitable for testing only)"
                 )
 
-            # Warmup: single forward pass with a dummy input at expected resolution
-            self._warmup(height=360, width=640)
+            # Warmup
+            self._warmup(height=self._input_h, width=self._input_w)
         except Exception:
             logger.exception("TrackNet: failed to initialise model")
             self.model = None
@@ -450,7 +584,20 @@ class TrackNetDetector:
             return [None] * len(diff_triplets)
 
         try:
-            tensors = [self._triplet_to_tensor(t) for t in diff_triplets]
+            # Get original frame size for coordinate scaling
+            orig_h, orig_w = diff_triplets[0][0].shape[:2]
+
+            # Resize frames if model expects different resolution
+            if self._is_wasb and (orig_h != self._input_h or orig_w != self._input_w):
+                resized_triplets = []
+                for triplet in diff_triplets:
+                    resized_triplets.append([
+                        cv2.resize(f, (self._input_w, self._input_h)) for f in triplet
+                    ])
+                tensors = [self._triplet_to_tensor(t) for t in resized_triplets]
+            else:
+                tensors = [self._triplet_to_tensor(t) for t in diff_triplets]
+
             batch = torch.stack(tensors, dim=0).to(self._device)  # (B, 9, H, W)
 
             with torch.no_grad():
@@ -458,18 +605,25 @@ class TrackNetDetector:
 
             results = []
             for i in range(output.shape[0]):
-                if self._is_classifier:
+                if self._is_wasb:
+                    # WASB TrackNetV2: 3-channel raw logits, take last frame (index 2)
+                    hmap = torch.sigmoid(output[i, 2]).cpu().numpy()  # (H, W) in [0, 1]
+                    det = self._peak_detect(hmap, threshold=_PEAK_THRESHOLD)
+                    # Scale coordinates back to original frame space
+                    if det is not None and (orig_h != self._input_h or orig_w != self._input_w):
+                        det["x"] = det["x"] * orig_w / self._input_w
+                        det["y"] = det["y"] * orig_h / self._input_h
+                    results.append(det)
+                elif self._is_classifier:
                     # BallTrackerNet: 256-channel output, softmax classification
-                    # Channel 0 = "no ball", channels 1-255 = ball confidence levels
-                    # Take argmax, convert to probability map
                     probs = torch.softmax(output[i], dim=0)  # (256, H, W)
-                    # Sum all non-background channels for ball probability
                     hmap = (1.0 - probs[0]).cpu().numpy()  # (H, W), high = ball likely
+                    threshold = 0.3
+                    results.append(self._peak_detect(hmap, threshold=threshold))
                 else:
                     # TrackNetV2: 1-channel sigmoid heatmap
                     hmap = output[i, 0].cpu().numpy()  # (H, W) in [0, 1]
-                threshold = 0.3 if self._is_classifier else _PEAK_THRESHOLD
-                results.append(self._peak_detect(hmap, threshold=threshold))
+                    results.append(self._peak_detect(hmap, threshold=_PEAK_THRESHOLD))
             return results
         except Exception:
             logger.warning("TrackNet detect_batch failed", exc_info=True)

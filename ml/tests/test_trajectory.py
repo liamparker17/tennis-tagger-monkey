@@ -6,7 +6,7 @@ import pytest
 from ml.trajectory import (
     Trajectory, TrajectoryFitter, deduplicate_detections, is_same_shot,
     segment_detections, _compute_adaptive_fallback_gap,
-    _FALLBACK_GAP_FRAMES_BASE, _FALLBACK_GAP_FRAMES_MAX,
+    _FALLBACK_GAP_SEC_BASE, _FALLBACK_GAP_SEC_MAX, _sec_to_frames,
 )
 
 
@@ -194,7 +194,7 @@ class TestAdaptiveFallbackGap:
             frames=list(range(20)),
         )
         gap = _compute_adaptive_fallback_gap(dets, fps=30.0)
-        assert gap == _FALLBACK_GAP_FRAMES_BASE
+        assert gap == _sec_to_frames(_FALLBACK_GAP_SEC_BASE, 30.0)
 
     def test_sparse_detection_scales_up(self):
         # Detection every 10 frames → median gap = 10 → 2x base
@@ -204,8 +204,8 @@ class TestAdaptiveFallbackGap:
             frames=[0, 10, 20, 30, 40],
         )
         gap = _compute_adaptive_fallback_gap(dets, fps=30.0)
-        assert gap > _FALLBACK_GAP_FRAMES_BASE
-        assert gap <= _FALLBACK_GAP_FRAMES_MAX
+        assert gap > _sec_to_frames(_FALLBACK_GAP_SEC_BASE, 30.0)
+        assert gap <= _sec_to_frames(_FALLBACK_GAP_SEC_MAX, 30.0)
 
     def test_very_sparse_clamps_to_max(self):
         # Detection every 50 frames → would scale past max
@@ -215,12 +215,12 @@ class TestAdaptiveFallbackGap:
             frames=[0, 50, 100],
         )
         gap = _compute_adaptive_fallback_gap(dets, fps=30.0)
-        assert gap == _FALLBACK_GAP_FRAMES_MAX
+        assert gap == _sec_to_frames(_FALLBACK_GAP_SEC_MAX, 30.0)
 
     def test_single_detection_uses_base(self):
         dets = _make_detections([100], [200], [0])
         gap = _compute_adaptive_fallback_gap(dets, fps=30.0)
-        assert gap == _FALLBACK_GAP_FRAMES_BASE
+        assert gap == _sec_to_frames(_FALLBACK_GAP_SEC_BASE, 30.0)
 
     def test_sparse_segmentation_merges_fragments(self):
         """Sparse detection within one shot arc should produce one segment, not many."""

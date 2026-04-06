@@ -130,18 +130,25 @@ class BridgeServer:
 
         self.detector = Detector(model_path=detector_model, device=device, backend=detector_backend)
         self.pose = PoseEstimator(device=device)
-        self.classifier = StrokeClassifier(model_path=classifier_model, device=device, model_type=classifier_name)
+        try:
+            self.classifier = StrokeClassifier(model_path=classifier_model, device=device, model_type=classifier_name)
+        except FileNotFoundError:
+            logger.warning("Stroke classifier weights not found at %s — stroke classification disabled", classifier_model)
+            self.classifier = None
         self.analyzer = Analyzer()
         self.score = ScoreTracker(device="cpu" if device == "auto" else device)
         self.trainer = Trainer(models_dir=models_dir, device=device)
 
         from ml.tracknet import TrackNetDetector
-        # Try pre-trained BallTrackerNet weights first, then TrackNetV2
-        tracknet_model = os.path.join(models_dir, "yastrebksv_tracknet.pt")
-        if not os.path.exists(tracknet_model):
-            tracknet_model = os.path.join(models_dir, "tracknet_v2.pt")
+        # Prefer WASB TrackNetV2 tennis weights (best accuracy), then BallTrackerNet
+        tracknet_candidates = [
+            os.path.join(models_dir, "tracknetv2_tennis_wasb.pt"),
+            os.path.join(models_dir, "yastrebksv_tracknet.pt"),
+            os.path.join(models_dir, "tracknet_v2.pt"),
+        ]
+        tracknet_model = next((p for p in tracknet_candidates if os.path.exists(p)), None)
         self.tracknet = TrackNetDetector(
-            model_path=tracknet_model if os.path.exists(tracknet_model) else None,
+            model_path=tracknet_model,
             device=device,
         )
 
@@ -222,17 +229,22 @@ class BridgeServer:
             ref_frames = batch[:30] if len(batch) >= 30 else batch
             self._bg_subtractor.build_reference(ref_frames)
 
-        # Background-subtract every frame
-        subtracted = [self._bg_subtractor.subtract(f) for f in batch]
+        # Background-subtract frames for BallTrackerNet (yastrebksv).
+        # WASB TrackNetV2 was trained on raw frames — skip subtraction.
+        if self.tracknet._is_wasb:
+            frames_for_detection = batch
+        else:
+            subtracted = [self._bg_subtractor.subtract(f) for f in batch]
+            frames_for_detection = subtracted
 
         # Build diff triplets for every frame >= 4 using [i-4, i-2, i]
         # (triplet indices still skip by 2, matching TrackNet's temporal design)
         results = []
-        for i in range(len(subtracted)):
+        for i in range(len(frames_for_detection)):
             if i < 4:
                 results.append({"frame_index": i, "ball": None})
                 continue
-            triplet = [subtracted[i - 4], subtracted[i - 2], subtracted[i]]
+            triplet = [frames_for_detection[i - 4], frames_for_detection[i - 2], frames_for_detection[i]]
             detections = self.tracknet.detect_batch([triplet])
             ball = detections[0] if detections else None
             results.append({"frame_index": i, "ball": ball})
@@ -282,29 +294,51 @@ class BridgeServer:
         If detection returns an identity (or near-identity) homography,
         substitutes a broadcast fallback derived from standard court
         dimensions and typical broadcast camera position.
+
+        The returned homography is always in 640x360 detection space so it
+        can be applied directly to TrackNet ball coordinates.
         """
         self._require_init()
         frame = _decode_frame(params["frame"])
+        native_w, native_h = frame.shape[1], frame.shape[0]
         result = self.analyzer.detect_court(frame)
 
         # Check if homography is identity or near-identity (detection failed)
         homography = result.get("homography")
+        use_fallback = False
         if homography is not None:
             H = np.array(homography, dtype=float)
             if H.shape == (3, 3) and np.allclose(H, np.eye(3), atol=1e-4):
                 logger.warning("Court detection returned identity homography, using broadcast fallback")
-                result = self._broadcast_fallback(frame.shape[1], frame.shape[0], result)
-        elif homography is None:
+                use_fallback = True
+        else:
             logger.warning("Court detection returned no homography, using broadcast fallback")
-            result = self._broadcast_fallback(frame.shape[1], frame.shape[0], result)
+            use_fallback = True
+
+        if use_fallback:
+            # Fallback already produces homography in 640x360 space
+            result = self._broadcast_fallback(native_w, native_h, result)
+            logger.info("Using broadcast fallback homography")
+        else:
+            # Court detection homography is in native pixel space.
+            # Rescale to 640x360 detection space so it works with TrackNet coords.
+            logger.info("Using detected court homography (method=%s, confidence=%.2f)",
+                       result.get("method", "unknown"), result.get("confidence", 0))
+            det_w, det_h = 640, 360
+            if native_w != det_w or native_h != det_h:
+                H = np.array(result["homography"], dtype=float)
+                # Pre-multiply by a scaling matrix: pixel_640 → pixel_native → [0,1]
+                # S maps 640x360 → native: S = diag(native_w/640, native_h/360, 1)
+                S = np.diag([native_w / det_w, native_h / det_h, 1.0])
+                H_det = H @ S  # now maps 640x360 pixels → [0,1]
+                result["homography"] = H_det.tolist()
 
         # Set court polygon on detector for player filtering
         polygon = result.get("polygon")
         if polygon is not None:
-            court_w = frame.shape[1]
             det_w = 640
-            if court_w != det_w and court_w > 0:
-                scale = det_w / court_w
+            if native_w != det_w and native_w > 0:
+                scale = det_w / native_w
                 scaled = [[int(p[0] * scale), int(p[1] * scale)] for p in polygon]
                 self.detector.set_court_polygon(scaled)
             else:
@@ -315,17 +349,31 @@ class BridgeServer:
     def _broadcast_fallback(width: int, height: int, result: dict) -> dict:
         """Compute a fallback homography for standard broadcast camera angle.
 
-        Assumes camera is centered behind one baseline, ~10m high, ~5m back.
-        Maps approximate court corner pixels to normalised [0,1] court coords.
+        The homography is always expressed in 640x360 detection space (the
+        resolution TrackNet operates at), regardless of the native frame size.
+        Maps approximate court corner pixels to normalised [0,1] court coords
+        which ``TrajectoryFitter.pixel_to_court`` then scales to metres.
         """
         import cv2
 
-        w, h = float(width), float(height)
+        # Work in 640x360 detection space — scale native coords down
+        det_w, det_h = 640.0, 360.0
+        scale_x = det_w / float(width)
+        scale_y = det_h / float(height)
+
+        # Approximate court corner positions for a standard broadcast view
+        # at 640x360.  These ratios work well for typical elevated side-on
+        # camera angles (e.g. Wimbledon, USO, AO).
+        #   far baseline: top of frame, narrower (perspective)
+        #   near baseline: lower portion of frame, wider
+        # The far points are placed above the actual baseline to account
+        # for the ball being in flight (1-3m above court surface) which
+        # shifts pixel position upward at the far end.
         src = np.float32([
-            [w * 0.25, h * 0.17],   # top-left court corner
-            [w * 0.75, h * 0.17],   # top-right court corner
-            [w * 0.125, h * 0.94],  # bottom-left court corner
-            [w * 0.875, h * 0.94],  # bottom-right court corner
+            [det_w * 0.22, det_h * 0.06],   # far-left (above baseline for airborne ball)
+            [det_w * 0.62, det_h * 0.06],   # far-right
+            [det_w * 0.08, det_h * 0.75],   # near-left baseline corner
+            [det_w * 0.84, det_h * 0.75],   # near-right baseline corner
         ])
         dst = np.float32([[0, 0], [1, 0], [0, 1], [1, 1]])
 
@@ -333,7 +381,9 @@ class BridgeServer:
         result["homography"] = H.tolist()
         result["method"] = "broadcast_fallback"
         result["confidence"] = 0.3
-        result["corners"] = src.tolist()
+        # Store corners in native resolution for polygon use
+        native_corners = (src / np.float32([scale_x, scale_y])).tolist()
+        result["corners"] = native_corners
         return result
 
     # ---- RPC: classify_strokes --------------------------------------------
@@ -352,6 +402,8 @@ class BridgeServer:
             clips.append(np.stack(frames))
 
         batch = np.stack(clips)  # (N, T, H, W, 3)
+        if self.classifier is None:
+            return [{"stroke": "unknown", "confidence": 0.0} for _ in clips]
         return self.classifier.classify(batch)
 
     # ---- RPC: analyze_placements ------------------------------------------
