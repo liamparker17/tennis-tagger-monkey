@@ -11,8 +11,10 @@ def _make_csv_with_two_rows(csv_path: Path) -> None:
     rows = []
     for _ in range(2):
         row = [""] * 120
-        row[2] = "1000"; row[3] = "1500"; row[5] = "P1"; row[6] = "P2"
-        row[13] = "Serve"; row[17] = "Serve"; row[32] = "1"; row[33] = "P1"; row[34] = "Ace"
+        # Real-layout indices: 1=Position, 2=Duration, 3=Server, 6=Returner,
+        # 4=serve stroke, 16=Last Shot, 20=Point Won, 31=Stroke Count, 93=W-E.
+        row[1] = "1000"; row[2] = "1500"; row[3] = "P1"; row[6] = "P2"
+        row[4] = "Serve"; row[16] = "Serve"; row[31] = "1"; row[20] = "P1"; row[93] = "Winner A"
         rows.append(",".join(row))
     csv_path.write_text(header + "\n".join(rows) + "\n", encoding="utf-8")
 
@@ -46,8 +48,8 @@ def test_process_match(tmp_path):
     csv = tmp_path / "m.csv"
     header = ",".join(f"c{i}" for i in range(120)) + "\n"
     row = [""] * 120
-    row[2] = "1000"; row[3] = "1500"; row[5] = "P1"; row[6] = "P2"
-    row[13] = "Serve"; row[17] = "Serve"; row[32] = "1"; row[33] = "P1"; row[34] = "Ace"
+    row[1] = "1000"; row[2] = "1500"; row[3] = "P1"; row[6] = "P2"
+    row[4] = "Serve"; row[16] = "Serve"; row[31] = "1"; row[20] = "P1"; row[93] = "Winner A"
     csv.write_text(header + ",".join(row) + "\n", encoding="utf-8")
 
     out = tmp_path / "out"
