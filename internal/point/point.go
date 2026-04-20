@@ -14,6 +14,11 @@ type Point struct {
 	Outcome   PointOutcome
 	Server    int
 	ServeSide string
+
+	// Fields populated by the Plan 3 multi-task model via PointFromPrediction.
+	WinnerOrError string  // "Ace","DoubleFault","Winner","ForcedError","UnforcedError"
+	Confidence    float64 // fused outcome probability
+	LowConfidence bool    // any head below its low-conf threshold
 }
 
 // minConfidence returns the minimum Confidence across all shots, or 1.0 if

@@ -16,6 +16,11 @@ type Shot struct {
 	IsServe    bool
 	SpeedKPH   float64
 	Confidence float64
+
+	// Fields populated by the Plan 3 multi-task model via PointFromPrediction.
+	StrokeType string  // "Serve","Forehand","Backhand","Volley","Slice","Smash","DropShot","Lob","Other"
+	InCourt    bool    // placement landed in
+	TimeS      float64 // contact time in match-absolute seconds
 }
 
 // trajBounce pairs a bounce with its parent trajectory.

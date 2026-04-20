@@ -13,6 +13,7 @@ import (
 	"github.com/liamp/tennis-tagger/internal/export"
 	"github.com/liamp/tennis-tagger/internal/pipeline"
 	"github.com/liamp/tennis-tagger/internal/point"
+	"github.com/liamp/tennis-tagger/internal/pointmodel"
 	"github.com/liamp/tennis-tagger/internal/tactics"
 )
 
@@ -27,6 +28,18 @@ type App struct {
 	report      *tactics.TacticalReport
 	corrections *corrections.Store
 	setup       *bridge.MatchSetup // optional: loaded from <video>.setup.json
+
+	// Plan 4 scaffolding: when --use-pointmodel is passed, main.go starts a
+	// Python inference server and hands the client here. Pipeline rewiring to
+	// call pmClient.PredictPoint per point window is the next integration step,
+	// blocked on a trained checkpoint.
+	pmClient *pointmodel.Client
+}
+
+// SetPointModelClient attaches a running PointModel inference-server client so
+// the pipeline can route per-point clips through the Plan 3 model.
+func (a *App) SetPointModelClient(c *pointmodel.Client) {
+	a.pmClient = c
 }
 
 // SetMatchSetup records the user's pre-flight data so exported rows can

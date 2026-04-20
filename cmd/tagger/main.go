@@ -10,6 +10,7 @@ import (
 	"github.com/liamp/tennis-tagger/internal/app"
 	"github.com/liamp/tennis-tagger/internal/bridge"
 	"github.com/liamp/tennis-tagger/internal/config"
+	"github.com/liamp/tennis-tagger/internal/pointmodel"
 )
 
 // loadMatchSetup reads <video>.setup.json (produced by preflight.py) if
@@ -67,6 +68,8 @@ func main() {
 	liveSource := flag.String("live", "", "Live source (webcam index or RTSP URL)")
 	retrain := flag.Bool("retrain", false, "Retrain model from accumulated corrections")
 	configPath := flag.String("config", "", "Path to YAML config file (default: use built-in defaults)")
+	usePointModel := flag.Bool("use-pointmodel", false, "Use Plan 3 multi-task model + Bayesian fusion for point recognition (requires --pointmodel-ckpt)")
+	pointModelCkpt := flag.String("pointmodel-ckpt", "files/models/point_model/run0/best.pt", "Path to the PointModel checkpoint")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -98,6 +101,24 @@ func main() {
 	}
 
 	a := app.NewApp(cfg, b)
+
+	if *usePointModel {
+		pmc, err := pointmodel.Start(*pythonPath, *pointModelCkpt)
+		if err != nil {
+			slog.Error("Failed to start PointModel inference server", "error", err, "ckpt", *pointModelCkpt)
+			fmt.Fprintf(os.Stderr, "Error: --use-pointmodel but server start failed: %v\n", err)
+			b.Close()
+			os.Exit(1)
+		}
+		defer pmc.Close()
+		if err := pmc.Ping(); err != nil {
+			slog.Error("PointModel ping failed", "error", err)
+			b.Close()
+			os.Exit(1)
+		}
+		a.SetPointModelClient(pmc)
+		slog.Info("PointModel inference server ready", "ckpt", *pointModelCkpt)
+	}
 
 	if *retrain {
 		fmt.Println("Retraining from corrections...")
