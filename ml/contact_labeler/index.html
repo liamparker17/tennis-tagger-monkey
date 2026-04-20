@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Contact Labeler</title>
+<style>
+  body{margin:0;font-family:sans-serif;display:grid;grid-template-columns:240px 1fr;height:100vh}
+  #side{overflow:auto;border-right:1px solid #ccc;padding:8px;font-size:13px}
+  #side .m{font-weight:bold;margin-top:8px}
+  #side .c{padding:2px 6px;cursor:pointer}
+  #side .c.done{color:green}
+  #side .c.active{background:#def}
+  #main{display:flex;flex-direction:column}
+  video{width:100%;background:#000;flex:1;min-height:0}
+  #bar{padding:6px;border-top:1px solid #ccc;font-family:monospace;font-size:12px}
+  #events{padding:6px;border-top:1px solid #ccc;max-height:120px;overflow:auto;font-family:monospace;font-size:12px}
+</style></head>
+<body>
+  <div id="side"></div>
+  <div id="main">
+    <video id="v" controls></video>
+    <div id="bar"></div>
+    <div id="events"></div>
+  </div>
+  <script src="/app.js"></script>
+</body></html>

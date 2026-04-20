@@ -520,3 +520,19 @@ class Analyzer:
             "ball_frames": count,
             "duration_sec": round((end - start) / fps, 3),
         }
+
+
+def detect_court_homography(frame_bgr: np.ndarray) -> Optional[np.ndarray]:
+    """Thin wrapper returning the 3x3 image->court homography for a BGR frame.
+
+    Used by feature extractors that need a one-shot homography estimate. Returns
+    None on any failure so callers can fall back to identity.
+    """
+    try:
+        result = Analyzer().detect_court(frame_bgr)
+        H = result.get("homography")
+        if H is None:
+            return None
+        return np.asarray(H)
+    except Exception:
+        return None
