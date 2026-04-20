@@ -1,7 +1,37 @@
-# Model weights
-models/*.pt
-models/*.onnx
-models/*.pth
+# Model weights (tracked .pt files go through git-lfs — see .gitattributes)
+# Keep everything NOT in models/ or files/models/ out of the repo
+/*.pt
+/*.onnx
+/*.pth
+files/*.pt
+files/*.onnx
+files/*.pth
+
+# Training data — keep out of git (large videos, CSVs)
+files/data/training_pairs/
+files/data/clips/
+files/data/features/
+
+# Logs + build artifacts
+*.log
+build_err.txt
+
+# Session data
+.claude/
+
+# Large local testdata
+testdata/sample_*.mp4
+testdata/sample_*.checkpoint.json
+testdata/sample_*_output.csv
+testdata/sample_*_BEFORE.csv
+testdata/sample_*_AFTER_*.csv
+testdata/wimbledon_*.mp4
+testdata/wimbledon_*.checkpoint.json
+testdata/wimbledon_*_output.csv
+testdata/wimbledon_frame.png
+
+# Python venv bundled under files/
+files/venv/
 
 # Python
 __pycache__/
