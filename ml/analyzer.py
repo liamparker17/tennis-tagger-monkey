@@ -32,6 +32,78 @@ class Analyzer:
 
     def __init__(self) -> None:
         self._court_cache: Optional[dict] = None
+        self._manual_court: Optional[dict] = None
+        self.near_player: Optional[str] = None
+        self.far_player: Optional[str] = None
+
+    def set_manual_court(
+        self,
+        corners_pixel: list,
+        frame_width: int,
+        frame_height: int,
+        near_player: Optional[str] = None,
+        far_player: Optional[str] = None,
+    ) -> None:
+        """Pre-populate the court cache from user-clicked corners.
+
+        The user clicks in **native pixel space** (whatever the video is
+        recorded at, e.g. 1920x1080). The rest of the pipeline operates in
+        640x360 detection space, so we scale the corners down before
+        computing the homography. This matches ``rpc_detect_court``'s
+        convention of storing H in 640x360 → [0,1] court coordinates.
+
+        ``corners_pixel`` is ordered [near_left, near_right, far_right, far_left]
+        — the same order ``preflight.py`` writes to the sidecar. Near = bottom
+        of frame = player A. Far = top of frame = player B.
+
+        Standard court target (normalised [0,1]):
+            near_left  -> (0, 1)   near_right -> (1, 1)
+            far_right  -> (1, 0)   far_left   -> (0, 0)
+        """
+        if len(corners_pixel) != 4:
+            raise ValueError(f"expected 4 corners, got {len(corners_pixel)}")
+        if frame_width <= 0 or frame_height <= 0:
+            raise ValueError(f"bad frame size: {frame_width}x{frame_height}")
+
+        # Native pixel corners (what the user clicked on)
+        pts_native = np.array(corners_pixel, dtype=np.float32).reshape(-1, 2)
+
+        # Scale into 640x360 detection space
+        det_w, det_h = 640.0, 360.0
+        sx = det_w / float(frame_width)
+        sy = det_h / float(frame_height)
+        pts_det = pts_native * np.array([sx, sy], dtype=np.float32)
+
+        standard = np.array([[0, 1], [1, 1], [1, 0], [0, 0]], dtype=np.float32)
+        homography, _ = cv2.findHomography(pts_det, standard)
+        if homography is None:
+            raise ValueError("could not compute homography from corners — likely collinear")
+
+        # Expand polygon 10% outward for player-filtering headroom.
+        # Kept in native-pixel space; rpc_set_manual_court rescales it for
+        # the detector (same pattern as rpc_detect_court).
+        cx_m = float(pts_native[:, 0].mean())
+        cy_m = float(pts_native[:, 1].mean())
+        expanded = ((pts_native - [cx_m, cy_m]) * 1.10 + [cx_m, cy_m])
+        expanded = np.clip(expanded, 0, [frame_width - 1, frame_height - 1]).astype(np.int32)
+
+        self._manual_court = {
+            "corners": pts_native.tolist(),         # native pixels (for debug/inspection)
+            "corners_det": pts_det.tolist(),        # 640x360 pixels (for homography domain)
+            "polygon": expanded.tolist(),           # native pixels
+            "homography": homography,               # 640x360 → [0,1] court
+            "method": "manual_preflight",
+            "confidence": 1.0,
+            "native_width": int(frame_width),
+            "native_height": int(frame_height),
+        }
+        self._court_cache = self._manual_court
+        self.near_player = near_player
+        self.far_player = far_player
+        logger.info(
+            "Court set manually from pre-flight: native=%dx%d near=%r far=%r",
+            frame_width, frame_height, near_player, far_player,
+        )
 
     # ------------------------------------------------------------------
     # Court detection
@@ -60,6 +132,8 @@ class Analyzer:
             ``confidence``.  ``polygon`` is the expanded court boundary
             for player filtering.
         """
+        if self._manual_court is not None:
+            return self._manual_court
         if self._court_cache is not None:
             return self._court_cache
 

@@ -65,7 +65,7 @@ func (r *TacticalReport) FormatText() string {
 	var sb strings.Builder
 
 	sb.WriteString("=== TACTICAL REPORT ===\n")
-	sb.WriteString(fmt.Sprintf("Duration: %s | Rallies: %d | Ball detections: %d\n",
+	sb.WriteString(fmt.Sprintf("Duration: %s | Points: %d | Ball detections: %d\n",
 		r.Duration, r.TotalRallies, r.BallDetections))
 
 	for _, player := range r.Players {

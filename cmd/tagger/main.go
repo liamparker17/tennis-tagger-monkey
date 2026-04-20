@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,53 @@ import (
 	"github.com/liamp/tennis-tagger/internal/bridge"
 	"github.com/liamp/tennis-tagger/internal/config"
 )
+
+// loadMatchSetup reads <video>.setup.json (produced by preflight.py) if
+// present and converts it to a bridge.MatchSetup. Returns (nil, nil) when
+// the sidecar is absent; returns an error only when the file exists but
+// is malformed.
+func loadMatchSetup(videoPath string) (*bridge.MatchSetup, error) {
+	sidecarPath := videoPath + ".setup.json"
+	data, err := os.ReadFile(sidecarPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", sidecarPath, err)
+	}
+
+	var raw struct {
+		FrameWidth       int `json:"frame_width"`
+		FrameHeight      int `json:"frame_height"`
+		CourtCornersPixel []struct {
+			Label string  `json:"label"`
+			X     float64 `json:"x"`
+			Y     float64 `json:"y"`
+		} `json:"court_corners_pixel"`
+		Players struct {
+			Near string `json:"near"`
+			Far  string `json:"far"`
+		} `json:"players"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", sidecarPath, err)
+	}
+	if len(raw.CourtCornersPixel) != 4 {
+		return nil, fmt.Errorf("%s: expected 4 corners, got %d", sidecarPath, len(raw.CourtCornersPixel))
+	}
+
+	setup := &bridge.MatchSetup{
+		FrameWidth:  raw.FrameWidth,
+		FrameHeight: raw.FrameHeight,
+		NearPlayer:  raw.Players.Near,
+		FarPlayer:   raw.Players.Far,
+	}
+	setup.CornersPixel = make([][2]float64, 4)
+	for i, c := range raw.CourtCornersPixel {
+		setup.CornersPixel[i] = [2]float64{c.X, c.Y}
+	}
+	return setup, nil
+}
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -91,6 +139,19 @@ func main() {
 	if len(args) > 0 {
 		videoPath := args[0]
 		fmt.Printf("Processing: %s\n", videoPath)
+
+		if setup, err := loadMatchSetup(videoPath); err != nil {
+			slog.Error("Failed to read setup sidecar", "error", err)
+			fmt.Fprintf(os.Stderr, "Warning: setup sidecar present but unreadable: %v\n", err)
+		} else if setup != nil {
+			a.SetMatchSetup(setup)
+			if err := b.SetManualCourt(*setup); err != nil {
+				slog.Error("SetManualCourt failed — falling back to auto-detect", "error", err)
+			} else {
+				fmt.Printf("Using pre-flight setup (near=%s, far=%s)\n", setup.NearPlayer, setup.FarPlayer)
+			}
+		}
+
 		if err := a.ProcessVideo(videoPath); err != nil {
 			slog.Error("Processing failed", "error", err)
 			os.Exit(1)

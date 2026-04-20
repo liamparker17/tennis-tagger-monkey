@@ -26,6 +26,13 @@ type App struct {
 	result      *pipeline.Result
 	report      *tactics.TacticalReport
 	corrections *corrections.Store
+	setup       *bridge.MatchSetup // optional: loaded from <video>.setup.json
+}
+
+// SetMatchSetup records the user's pre-flight data so exported rows can
+// reference the real player names instead of generic indices.
+func (a *App) SetMatchSetup(setup *bridge.MatchSetup) {
+	a.setup = setup
 }
 
 // NewApp creates a new App with the given config and bridge backend.
@@ -95,7 +102,7 @@ func (a *App) ExportCSV(outputPath string) error {
 	}
 
 	// Convert pipeline detections to export rows.
-	rows := resultToRows(a.result)
+	rows := resultToRows(a.result, a.setup)
 
 	if err := a.exporter.ExportFile(rows, outputPath); err != nil {
 		return fmt.Errorf("export CSV: %w", err)
@@ -230,16 +237,44 @@ func (a *App) TriggerRetrain() (map[string]interface{}, error) {
 //	49  T2: Frame Number    — start frame of first shot
 //	50  U1: Confidence Score — minimum shot confidence in point
 //	51  V1: Notes        — per-shot detail (CSV encoded inline)
-func resultToRows(r *pipeline.Result) []export.ResultRow {
+func resultToRows(r *pipeline.Result, setup *bridge.MatchSetup) []export.ResultRow {
 	if len(r.Points) > 0 {
-		return pointsToRows(r)
+		return pointsToRows(r, setup)
 	}
 	return detectionsToRows(r)
 }
 
-// pointsToRows emits one row per recognised Point, mapping fields into the
-// Dartfish column layout and encoding per-shot data in V1: Notes.
-func pointsToRows(r *pipeline.Result) []export.ResultRow {
+// playerName resolves a player index (0 = near / Player A, 1 = far /
+// Player B) to the user-supplied name from the pre-flight sidecar, or
+// to "Player A" / "Player B" if no setup was provided.
+func playerName(setup *bridge.MatchSetup, idx int) string {
+	if setup != nil {
+		if idx == 0 && setup.NearPlayer != "" {
+			return setup.NearPlayer
+		}
+		if idx == 1 && setup.FarPlayer != "" {
+			return setup.FarPlayer
+		}
+	}
+	if idx == 0 {
+		return "Player A"
+	}
+	return "Player B"
+}
+
+// xyCoord formats a normalised court position [0,1] as the "x;y" string
+// Dartfish expects (using a 0-200 coordinate scale to match the
+// human-tagged export range, e.g. "113;74").
+func xyCoord(cx, cy float64) string {
+	if cx == 0 && cy == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d;%d", int(cx*200), int(cy*200))
+}
+
+// pointsToRows emits one row per recognised Point, mapping our pipeline
+// output into the real Dartfish column layout the human tagger uses.
+func pointsToRows(r *pipeline.Result, setup *bridge.MatchSetup) []export.ResultRow {
 	rows := make([]export.ResultRow, 0, len(r.Points))
 
 	// Build a running match state mirror so we can report score-after-point.
@@ -251,112 +286,107 @@ func pointsToRows(r *pipeline.Result) []export.ResultRow {
 		ms = point.NewMatchState(r.Points[0].Server)
 	}
 
-	for i, pt := range r.Points {
+	// Match-level metadata (same on every row).
+	playerA := playerName(setup, 0) // near = Player A
+	playerB := playerName(setup, 1) // far  = Player B
+
+	for _, pt := range r.Points {
 		fields := make([]string, len(export.DartfishColumns))
 
-		// col 0: Name
-		fields[0] = fmt.Sprintf("Point %d", pt.Number)
+		// Name / identity
+		fields[export.ColName] = fmt.Sprintf("Point %d", pt.Number)
+		fields[export.ColPlayerA] = playerA
+		fields[export.ColPlayerB] = playerB
 
-		// col 3: Point Level
-		fields[3] = fmt.Sprintf("%d", pt.Number)
+		// Server / Returner (full names)
+		serverName := playerName(setup, pt.Server)
+		returnerName := playerName(setup, 1-pt.Server)
+		fields[export.ColServer] = serverName
+		fields[export.ColReturner] = returnerName
 
-		// col 4: A1: Server
-		fields[4] = fmt.Sprintf("%d", pt.Server)
+		// Serve placement
+		fields[export.ColServePlacement] = pt.ServeSide
 
-		// col 6: A3: Serve Placement (serve side)
-		fields[6] = pt.ServeSide
+		// Stroke count (H1) — this is what the human tagger records,
+		// NOT a separate rally concept.
+		fields[export.ColStrokeCount] = fmt.Sprintf("%d", len(pt.Shots))
 
-		// col 22: G1: Rally Length
-		fields[22] = fmt.Sprintf("%d", len(pt.Shots))
+		// Point winner (F1) — stored as the winning player's name so it
+		// matches the Dartfish convention instead of a numeric index.
+		fields[export.ColPointWon] = playerName(setup, pt.Outcome.Winner)
 
-		// col 20: F1: Point Won
-		fields[20] = fmt.Sprintf("%d", pt.Outcome.Winner)
-
-		// col 50: U1: Confidence Score
-		fields[50] = fmt.Sprintf("%.3f", pt.Outcome.Confidence)
-
-		// Outcome-based columns
-		switch pt.Outcome.Category {
-		case "winner", "ace":
-			fields[26] = pt.Outcome.Category // I1: Winner Type
-		case "unforced_error", "double_fault", "error":
-			fields[27] = pt.Outcome.Category // I2: Error Type
-		}
-
-		// Last shot data
+		// Last-shot data + winner/error flags
 		if n := len(pt.Shots); n > 0 {
 			last := pt.Shots[n-1]
-			fields[16] = fmt.Sprintf("%d", last.Hitter) // E1: Last Shot
+			fields[export.ColLastShot] = playerName(setup, last.Hitter)
 
 			if last.Hitter == pt.Outcome.Winner {
-				fields[17] = "1" // E2: Last Shot Winner
+				fields[export.ColLastShotWinner] = playerName(setup, last.Hitter)
 			} else {
-				fields[18] = "1" // E3: Last Shot Error
+				fields[export.ColLastShotError] = playerName(setup, last.Hitter)
 			}
 
 			if last.Bounce != nil {
-				fields[19] = last.Bounce.InOut // E4: Last Shot Placement
+				fields[export.ColLastShotPlacement] = last.Bounce.InOut
+				fields[export.ColXYLastShot] = xyCoord(last.Bounce.CX, last.Bounce.CY)
 			}
 
-			// First serve speed and number
+			// Serve data + speed + XY
 			first := pt.Shots[0]
 			if first.IsServe {
 				if first.SpeedKPH > 0 {
-					fields[35] = fmt.Sprintf("%.1f", first.SpeedKPH) // M1: Serve Speed
+					fields[export.ColServeData] = fmt.Sprintf("%.1f kph", first.SpeedKPH)
 				}
-				// Is this a first or second serve? If shot[0] is out and shot[1]
-				// is also a serve, the point had a second serve.
-				serveNum := "1"
-				if n >= 2 && pt.Shots[1].IsServe {
-					serveNum = "2"
-				}
-				fields[36] = serveNum // M2: Serve Number
-
-				// N1: First Serve In
-				if first.Bounce != nil && first.Bounce.InOut == "in" {
-					fields[37] = "1"
-				} else {
-					fields[37] = "0"
+				// Which court was the serve struck from?
+				if first.Bounce != nil {
+					if strings.EqualFold(pt.ServeSide, "Ad") || strings.HasPrefix(strings.ToLower(pt.ServeSide), "ad") {
+						fields[export.ColXYAd] = xyCoord(first.Bounce.CX, first.Bounce.CY)
+					} else {
+						fields[export.ColXYDeuce] = xyCoord(first.Bounce.CX, first.Bounce.CY)
+					}
 				}
 			}
 
-			// Timestamp and frame number of first shot's start frame
+			// Return shot (the 2nd shot in the rally, if present).
+			if n >= 2 {
+				ret := pt.Shots[1]
+				fields[export.ColReturner] = playerName(setup, ret.Hitter)
+				if ret.Bounce != nil {
+					fields[export.ColReturnPlacement] = ret.Bounce.InOut
+					fields[export.ColXYReturn] = xyCoord(ret.Bounce.CX, ret.Bounce.CY)
+				}
+			}
+
+			// Serve+1 and Return+1 XY
+			if n >= 3 && pt.Shots[2].Bounce != nil {
+				fields[export.ColXYSrvPlus1] = xyCoord(pt.Shots[2].Bounce.CX, pt.Shots[2].Bounce.CY)
+			}
+			if n >= 4 && pt.Shots[3].Bounce != nil {
+				fields[export.ColXYRetPlus1] = xyCoord(pt.Shots[3].Bounce.CX, pt.Shots[3].Bounce.CY)
+			}
+
+			// Position (start of point) + Duration
 			if r.FPS > 0 {
 				sec := float64(first.StartFrame) / r.FPS
-				fields[1] = export.FormatTimestamp(sec)  // Position
-				fields[48] = export.FormatTimestamp(sec) // T1: Video Timestamp
-			}
-			fields[49] = fmt.Sprintf("%d", first.StartFrame) // T2: Frame Number
+				fields[export.ColPosition] = export.FormatTimestamp(sec)
 
-			// Duration of the point
-			if r.FPS > 0 && n > 0 {
-				lastShot := pt.Shots[n-1]
-				endFrame := lastShot.EndFrame
+				endFrame := last.EndFrame
 				if endFrame <= first.StartFrame {
-					endFrame = lastShot.StartFrame
+					endFrame = last.StartFrame
 				}
 				durSec := float64(endFrame-first.StartFrame) / r.FPS
-				fields[2] = export.FormatTimestamp(durSec)
+				fields[export.ColDuration] = export.FormatTimestamp(durSec)
 			}
 		}
 
-		// F2: Point Score — score *after* this point is awarded.
-		// Advance the mirrored match state and snapshot the result.
+		// Advance mirrored match state, snapshot for score columns.
 		ms.AwardPoint(pt.Outcome.Winner)
-		fields[21] = formatPointScore(ms)
+		fields[export.ColPointScore] = formatPointScore(ms)
+		fields[export.ColGameScore] = fmt.Sprintf("%d-%d", ms.GameScore[0], ms.GameScore[1])
+		fields[export.ColDeuceAd] = ms.ServeSide
+		fields[export.ColSetNumber] = fmt.Sprintf("%d", len(ms.Sets)+1)
+		fields[export.ColSetScore] = fmt.Sprintf("%d-%d", ms.SetScore[0], ms.SetScore[1])
 
-		// K1: Deuce/Ad, K2: Game Score
-		fields[31] = ms.ServeSide
-		fields[32] = fmt.Sprintf("%d-%d", ms.GameScore[0], ms.GameScore[1])
-
-		// L1: Set Number — current set (completed sets + 1)
-		fields[33] = fmt.Sprintf("%d", len(ms.Sets)+1)
-
-		// V1: Notes — per-shot detail encoded as a semicolon-separated list.
-		// Format per shot: "shotN:hitter=H,cx=X,cy=Y,inout=I,speed=S,serve=B"
-		fields[51] = encodeShotNotes(pt.Shots)
-
-		_ = i // used implicitly via loop variable
 		rows = append(rows, export.ResultRow{Fields: fields})
 	}
 

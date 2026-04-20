@@ -46,20 +46,6 @@ func (m *MockBridge) DetectBatch(frames []Frame) ([]DetectionResult, error) {
 	return results, nil
 }
 
-// ClassifyStrokes returns "forehand" with 0.85 confidence for each clip.
-func (m *MockBridge) ClassifyStrokes(clips []FrameClip) ([]StrokeResult, error) {
-	results := make([]StrokeResult, len(clips))
-	for i, clip := range clips {
-		results[i] = StrokeResult{
-			Type:       "forehand",
-			Confidence: 0.85,
-			Frame:      clip.Center,
-			PlayerID:   0,
-		}
-	}
-	return results, nil
-}
-
 // AnalyzePlacements returns "deuce_wide", "baseline", 45.0 for each detection.
 func (m *MockBridge) AnalyzePlacements(detections []DetectionResult, court CourtData) ([]PlacementResult, error) {
 	results := make([]PlacementResult, len(detections))
@@ -114,21 +100,6 @@ func (m *MockBridge) DetectCourt(frame Frame) (CourtData, error) {
 	}, nil
 }
 
-// TrackNetBatch returns one ball position per frame with mock coordinates.
-func (m *MockBridge) TrackNetBatch(frames []Frame) ([]BallPosition, error) {
-	var positions []BallPosition
-	for i := range frames {
-		positions = append(positions, BallPosition{
-			X:          305,
-			Y:          255,
-			Confidence: 0.8,
-			FrameIndex: i,
-			Source:      "tracknet",
-		})
-	}
-	return positions, nil
-}
-
 // FitTrajectories returns one trajectory spanning all positions with a mock bounce.
 func (m *MockBridge) FitTrajectories(positions []BallPosition, court CourtData, fps float64) ([]TrajectoryResult, error) {
 	if len(positions) == 0 {
@@ -152,8 +123,8 @@ func (m *MockBridge) FitTrajectories(positions []BallPosition, court CourtData, 
 	}, nil
 }
 
-// SetBackgroundReference is a no-op for the mock bridge.
-func (m *MockBridge) SetBackgroundReference(frames []Frame) error { return nil }
+// SetManualCourt is a no-op for the mock bridge.
+func (m *MockBridge) SetManualCourt(setup MatchSetup) error { return nil }
 
 // TrainModel is a no-op that returns nil.
 func (m *MockBridge) TrainModel(pairs []TrainingPair, config TrainingConfig) error {

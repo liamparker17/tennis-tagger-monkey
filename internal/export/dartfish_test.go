@@ -8,8 +8,8 @@ import (
 )
 
 func TestDartfishColumns_Count(t *testing.T) {
-	if got := len(DartfishColumns); got != 62 {
-		t.Fatalf("DartfishColumns: want 62 columns, got %d", got)
+	if got := len(DartfishColumns); got != 116 {
+		t.Fatalf("DartfishColumns: want 116 columns, got %d", got)
 	}
 }
 
@@ -18,7 +18,7 @@ func TestExport_HeaderRow(t *testing.T) {
 	var buf bytes.Buffer
 
 	// Export with one data row to verify header + data
-	row := ResultRow{Fields: make([]string, 62)}
+	row := ResultRow{Fields: make([]string, 116)}
 	row.Fields[0] = "Point 1"
 	if err := exp.Export([]ResultRow{row}, &buf); err != nil {
 		t.Fatalf("Export: %v", err)
@@ -35,8 +35,8 @@ func TestExport_HeaderRow(t *testing.T) {
 	}
 
 	header := records[0]
-	if len(header) != 62 {
-		t.Fatalf("header: want 62 columns, got %d", len(header))
+	if len(header) != 116 {
+		t.Fatalf("header: want 116 columns, got %d", len(header))
 	}
 
 	// Verify every column name matches
@@ -65,8 +65,8 @@ func TestExport_EmptyResults(t *testing.T) {
 		t.Fatalf("want 1 row (header only), got %d", len(records))
 	}
 
-	if len(records[0]) != 62 {
-		t.Fatalf("header: want 62 columns, got %d", len(records[0]))
+	if len(records[0]) != 116 {
+		t.Fatalf("header: want 116 columns, got %d", len(records[0]))
 	}
 }
 
@@ -74,7 +74,7 @@ func TestExport_PadShortRow(t *testing.T) {
 	exp := NewDartfishExporter()
 	var buf bytes.Buffer
 
-	// Row with only 3 fields — should be padded to 62
+	// Row with only 3 fields — should be padded to 116
 	row := ResultRow{Fields: []string{"Point 1", "00:05.000", "3.2s"}}
 	if err := exp.Export([]ResultRow{row}, &buf); err != nil {
 		t.Fatalf("Export: %v", err)
@@ -90,8 +90,8 @@ func TestExport_PadShortRow(t *testing.T) {
 		t.Fatalf("want 2 rows, got %d", len(records))
 	}
 
-	if len(records[1]) != 62 {
-		t.Fatalf("data row: want 62 columns, got %d", len(records[1]))
+	if len(records[1]) != 116 {
+		t.Fatalf("data row: want 116 columns, got %d", len(records[1]))
 	}
 
 	if records[1][0] != "Point 1" {

@@ -2,7 +2,6 @@ package bridge
 
 import (
 	"bufio"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -252,106 +251,6 @@ func (b *ProcessBridge) DetectBatch(frames []Frame) ([]DetectionResult, error) {
 // Uses shared memory file for frame data transfer (no base64 serialization).
 // Returns one BallPosition per frame where a ball was detected; frames with
 // no detection are omitted from the returned slice.
-func (b *ProcessBridge) TrackNetBatch(frames []Frame) ([]BallPosition, error) {
-	// Lazy init shared memory buffer
-	if b.shm == nil {
-		var err error
-		b.shm, err = NewSharedMemBuffer(os.TempDir())
-		if err != nil {
-			return nil, fmt.Errorf("TrackNetBatch: create shm: %w", err)
-		}
-	}
-
-	// Write raw frame bytes to shared memory file
-	shmPath, metas, err := b.shm.WriteBatch(frames)
-	if err != nil {
-		return nil, fmt.Errorf("TrackNetBatch: write shm: %w", err)
-	}
-
-	// Send only metadata (path + offsets) — Python reads pixels from file
-	payload, err := json.Marshal(map[string]interface{}{
-		"shm_path": shmPath,
-		"frames":   metas,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("TrackNetBatch: marshal: %w", err)
-	}
-
-	result, err := b.worker.Call("tracknet_batch", payload)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse: [{"frame_index": int, "ball": {"x": float, "y": float, "confidence": float} | null}]
-	var raw []struct {
-		FrameIndex int      `json:"frame_index"`
-		Ball       *BallXY  `json:"ball"`
-	}
-	if err := json.Unmarshal(result, &raw); err != nil {
-		return nil, fmt.Errorf("TrackNetBatch: unmarshal: %w", err)
-	}
-
-	var positions []BallPosition
-	for _, r := range raw {
-		if r.Ball == nil {
-			continue
-		}
-		positions = append(positions, BallPosition{
-			X:          r.Ball.X,
-			Y:          r.Ball.Y,
-			Confidence: r.Ball.Confidence,
-			FrameIndex: r.FrameIndex,
-			Source:     "tracknet",
-		})
-	}
-	return positions, nil
-}
-
-// BallXY is an internal helper for decoding Python ball detection output.
-type BallXY struct {
-	X          float64 `json:"x"`
-	Y          float64 `json:"y"`
-	Confidence float64 `json:"confidence"`
-}
-
-// ClassifyStrokes classifies strokes from frame clips.
-func (b *ProcessBridge) ClassifyStrokes(clips []FrameClip) ([]StrokeResult, error) {
-	// Encode clips with base64 frames
-	clipsData := make([]map[string]interface{}, len(clips))
-	for i, clip := range clips {
-		frames := make([]map[string]interface{}, len(clip.Frames))
-		for j, f := range clip.Frames {
-			frames[j] = map[string]interface{}{
-				"width":       f.Width,
-				"height":      f.Height,
-				"data_base64": base64.StdEncoding.EncodeToString(f.Data),
-			}
-		}
-		clipsData[i] = map[string]interface{}{
-			"frames": frames,
-			"center": clip.Center,
-		}
-	}
-
-	payload, err := json.Marshal(map[string]interface{}{
-		"clips": clipsData,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ClassifyStrokes: marshal: %w", err)
-	}
-
-	result, err := b.worker.Call("classify_strokes", payload)
-	if err != nil {
-		return nil, err
-	}
-
-	var strokes []StrokeResult
-	if err := json.Unmarshal(result, &strokes); err != nil {
-		return nil, fmt.Errorf("ClassifyStrokes: unmarshal: %w", err)
-	}
-	return strokes, nil
-}
-
 // AnalyzePlacements analyzes shot placements given detections and court data.
 func (b *ProcessBridge) AnalyzePlacements(detections []DetectionResult, court CourtData) ([]PlacementResult, error) {
 	payload, err := json.Marshal(map[string]interface{}{
@@ -507,41 +406,20 @@ func (b *ProcessBridge) FitTrajectories(positions []BallPosition, court CourtDat
 	return trajectories, nil
 }
 
-// SetBackgroundReference sends reference frames to the Python bridge for
-// building the TrackNet background subtraction model.
-func (b *ProcessBridge) SetBackgroundReference(frames []Frame) error {
-	if len(frames) == 0 {
-		return nil
+// SetManualCourt sends user-clicked corners to the Python analyzer.
+// Skips auto court detection for the rest of the session.
+func (b *ProcessBridge) SetManualCourt(setup MatchSetup) error {
+	if len(setup.CornersPixel) != 4 {
+		return fmt.Errorf("SetManualCourt: expected 4 corners, got %d", len(setup.CornersPixel))
 	}
-	if b.shm == nil {
-		var err error
-		b.shm, err = NewSharedMemBuffer(os.TempDir())
-		if err != nil {
-			return fmt.Errorf("SetBackgroundReference: create shm: %w", err)
-		}
-	}
-
-	shmPath, metas, err := b.shm.WriteBatch(frames)
-	if err != nil {
-		return fmt.Errorf("SetBackgroundReference: write shm: %w", err)
-	}
-
-	frameMetas := make([]map[string]interface{}, len(metas))
-	for i, m := range metas {
-		frameMetas[i] = map[string]interface{}{
-			"offset": m.Offset,
-			"width":  m.Width,
-			"height": m.Height,
-			"size":   m.Size,
-		}
-	}
-
 	payload, _ := json.Marshal(map[string]interface{}{
-		"shm_path": shmPath,
-		"frames":   frameMetas,
+		"corners_pixel": setup.CornersPixel,
+		"frame_width":   setup.FrameWidth,
+		"frame_height":  setup.FrameHeight,
+		"near_player":   setup.NearPlayer,
+		"far_player":    setup.FarPlayer,
 	})
-
-	_, err = b.worker.Call("set_background_reference", payload)
+	_, err := b.worker.Call("set_manual_court", payload)
 	return err
 }
 

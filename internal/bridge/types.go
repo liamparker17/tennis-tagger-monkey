@@ -149,17 +149,25 @@ type TrajectoryResult struct {
 	Vy         float64   `json:"vy"`
 }
 
+// MatchSetup holds pre-flight data (court corners + player names)
+// produced by preflight.py.
+type MatchSetup struct {
+	CornersPixel [][2]float64 `json:"corners_pixel"` // [near_left, near_right, far_right, far_left]
+	FrameWidth   int          `json:"frame_width"`
+	FrameHeight  int          `json:"frame_height"`
+	NearPlayer   string       `json:"near_player"`
+	FarPlayer    string       `json:"far_player"`
+}
+
 // BridgeBackend defines the interface for ML backend communication.
 // Implementations may use subprocess, gRPC, or in-process FFI.
 type BridgeBackend interface {
 	// Init initializes the backend with the given configuration.
 	Init(config BridgeConfig) error
 
-	// DetectBatch runs object detection on a batch of frames.
+	// DetectBatch runs object detection on a batch of frames. Returns
+	// per-frame ball + player boxes from a single YOLO forward pass.
 	DetectBatch(frames []Frame) ([]DetectionResult, error)
-
-	// ClassifyStrokes classifies strokes from frame clips.
-	ClassifyStrokes(clips []FrameClip) ([]StrokeResult, error)
 
 	// AnalyzePlacements analyzes shot placements given detections and court data.
 	AnalyzePlacements(detections []DetectionResult, court CourtData) ([]PlacementResult, error)
@@ -170,11 +178,10 @@ type BridgeBackend interface {
 	// DetectCourt detects the court in a single frame.
 	DetectCourt(frame Frame) (CourtData, error)
 
-	// TrackNetBatch runs TrackNet ball detection on a batch of frames.
-	TrackNetBatch(frames []Frame) ([]BallPosition, error)
-
-	// SetBackgroundReference sends reference frames for TrackNet background subtraction.
-	SetBackgroundReference(frames []Frame) error
+	// SetManualCourt installs user-clicked court corners for this match.
+	// Skips auto-detection when set. Corners are ordered
+	// [near_left, near_right, far_right, far_left] in original pixel space.
+	SetManualCourt(setup MatchSetup) error
 
 	// FitTrajectories sends ball positions to the trajectory fitter and returns
 	// fitted trajectory segments with bounce detection and in/out calls.

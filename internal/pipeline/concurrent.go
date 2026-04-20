@@ -5,11 +5,23 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/liamp/tennis-tagger/internal/bridge"
 	"github.com/liamp/tennis-tagger/internal/point"
 	"github.com/liamp/tennis-tagger/internal/video"
 )
+
+// stageTimings accumulates wall-clock time spent in each pipeline stage.
+// All fields are nanoseconds stored via atomic ops so goroutines can add concurrently.
+type stageTimings struct {
+	frameExtractNs   atomic.Int64
+	detectRPCNs      atomic.Int64
+	stage3TrackingNs atomic.Int64
+	detectBatches    atomic.Int64
+	totalFrames      atomic.Int64
+}
 
 // frameBatch carries extracted frames and their starting index through the pipeline.
 type frameBatch struct {
@@ -29,6 +41,9 @@ type detectionBatch struct {
 // Stage 2: ML inference (goroutine) -> detCh
 // Stage 3: Tracking + assembly (main goroutine)
 func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
+	timings := &stageTimings{}
+	pipelineStart := time.Now()
+
 	// 1. Open video
 	p.progress = ProgressInfo{Stage: "opening"}
 	vr, err := video.Open(videoPath)
@@ -68,33 +83,6 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 		result.Court = court
 	}
 
-	// 2b. Sample reference frames for TrackNet background subtraction.
-	// Extract 30 frames evenly spaced across the video.
-	{
-		refCount := 30
-		if meta.TotalFrames < refCount {
-			refCount = meta.TotalFrames
-		}
-		step := meta.TotalFrames / refCount
-		if step < 1 {
-			step = 1
-		}
-		var refFrames []bridge.Frame
-		for i := 0; i < meta.TotalFrames && len(refFrames) < refCount; i += step {
-			frames, err := vr.ExtractBatch(i, 1)
-			if err == nil && len(frames) > 0 {
-				refFrames = append(refFrames, videoFrameToBridgeFrame(frames[0]))
-			}
-		}
-		if len(refFrames) > 0 {
-			if err := p.bridge.SetBackgroundReference(refFrames); err != nil {
-				slog.Warn("Failed to set background reference", "error", err)
-			} else {
-				slog.Info("Background reference set", "frames", len(refFrames))
-			}
-		}
-	}
-
 	// 3. Set up pipeline parameters
 	p.progress.Stage = "detection"
 	batchSize := p.config.Pipeline.BatchSize
@@ -130,7 +118,9 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 				count = meta.TotalFrames - start
 			}
 
+			extractStart := time.Now()
 			frames, err := vr.ExtractBatch(start, count)
+			timings.frameExtractNs.Add(int64(time.Since(extractStart)))
 			if err != nil {
 				stage1Err = fmt.Errorf("extract batch at frame %d: %w", start, err)
 				cancel()
@@ -139,6 +129,7 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 			if len(frames) == 0 {
 				return
 			}
+			timings.totalFrames.Add(int64(len(frames)))
 
 			select {
 			case frameCh <- frameBatch{Frames: frames, StartFrame: start}:
@@ -160,7 +151,12 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 				bFrames[i] = videoFrameToBridgeFrame(f)
 			}
 
+			detectStart := time.Now()
 			detections, err := p.bridge.DetectBatch(bFrames)
+			detectElapsed := time.Since(detectStart)
+			timings.detectRPCNs.Add(int64(detectElapsed))
+			timings.detectBatches.Add(1)
+			slog.Info("detect_batch timing", "start_frame", fb.StartFrame, "batch_size", len(bFrames), "ms", detectElapsed.Milliseconds())
 			if err != nil {
 				stage2Err = fmt.Errorf("detect batch at frame %d: %w", fb.StartFrame, err)
 				cancel()
@@ -184,14 +180,8 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 				}
 			}
 
-			// Run TrackNet on the same frames for dedicated ball detection.
-			trackNetPositions, trackErr := p.bridge.TrackNetBatch(bFrames)
-			if trackErr != nil {
-				slog.Warn("TrackNet batch failed, using YOLO ball only", "frame", fb.StartFrame, "error", trackErr)
-			}
-
-			// Merge TrackNet + YOLO ball positions for this batch.
-			ballPositions := mergeBallPositions(detections, trackNetPositions, fb.StartFrame)
+			// Extract ball positions directly from the YOLO detections.
+			ballPositions := ballPositionsFromDetections(detections)
 
 			select {
 			case detCh <- detectionBatch{Detections: detections, BallPositions: ballPositions, StartFrame: fb.StartFrame}:
@@ -203,6 +193,7 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 
 	// --- Stage 3: Tracking + assembly (main goroutine) ---
 	for db := range detCh {
+		stage3Start := time.Now()
 		result.Detections = append(result.Detections, db.Detections...)
 		result.BallPositions = append(result.BallPositions, db.BallPositions...)
 
@@ -210,6 +201,7 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 			tracked := p.tracker.Update(det.Players)
 			result.Tracks = append(result.Tracks, tracked)
 		}
+		timings.stage3TrackingNs.Add(int64(time.Since(stage3Start)))
 
 		result.ProcessedFrames = db.StartFrame + len(db.Detections)
 		pct := 0.0
@@ -247,22 +239,27 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 
 	// 4. Post-processing: segment rallies
 	p.progress.Stage = "post_processing"
+	segRallStart := time.Now()
 	rallies, err := p.bridge.SegmentRallies(result.Detections, meta.FPS)
+	segRallMs := time.Since(segRallStart).Milliseconds()
 	if err != nil {
 		return nil, fmt.Errorf("segment rallies: %w", err)
 	}
 	result.Rallies = rallies
 
 	// 5. Post-processing: analyze placements
+	placeStart := time.Now()
 	placements, err := p.bridge.AnalyzePlacements(result.Detections, result.Court)
+	placeMs := time.Since(placeStart).Milliseconds()
 	if err != nil {
 		return nil, fmt.Errorf("analyze placements: %w", err)
 	}
 	result.Placements = placements
 
 	// 6. Fit trajectories
+	trajStart := time.Now()
 	p.progress.Stage = "trajectory_fitting"
-	slog.Info("Ball detection summary", "tracknet_and_yolo", len(result.BallPositions), "total_frames", len(result.Detections))
+	slog.Info("Ball detection summary", "yolo_balls", len(result.BallPositions), "total_frames", len(result.Detections))
 	if len(result.BallPositions) > 0 {
 		trajectories, err := p.bridge.FitTrajectories(result.BallPositions, result.Court, meta.FPS)
 		if err != nil {
@@ -287,6 +284,23 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 
 	slog.Info("Analysis complete", "trajectories", len(result.Trajectories), "shots", len(result.Shots), "points", len(result.Points))
 
+	trajMs := time.Since(trajStart).Milliseconds()
+	totalMs := time.Since(pipelineStart).Milliseconds()
+	totalFrames := timings.totalFrames.Load()
+	fps := float64(totalFrames) / (float64(totalMs) / 1000.0)
+	slog.Info("=== PIPELINE TIMING SUMMARY ===",
+		"total_ms", totalMs,
+		"total_frames", totalFrames,
+		"throughput_fps", fmt.Sprintf("%.2f", fps),
+		"frame_extract_ms", timings.frameExtractNs.Load()/1_000_000,
+		"detect_rpc_total_ms", timings.detectRPCNs.Load()/1_000_000,
+		"detect_batches", timings.detectBatches.Load(),
+		"stage3_tracking_ms", timings.stage3TrackingNs.Load()/1_000_000,
+		"segment_rallies_ms", segRallMs,
+		"analyze_placements_ms", placeMs,
+		"trajectory_post_ms", trajMs,
+	)
+
 	p.progress.Stage = "complete"
 	p.progress.Percent = 100
 
@@ -297,28 +311,26 @@ func (p *Pipeline) ProcessConcurrent(videoPath string) (*Result, error) {
 // For each frame, if YOLO detected a ball, a BallPosition is created from it.
 // TrackNet positions are included as-is. When both sources detect a ball on
 // the same frame, both are kept (downstream trajectory fitting can weight them).
-func mergeBallPositions(detections []bridge.DetectionResult, trackNet []bridge.BallPosition, startFrame int) []bridge.BallPosition {
-	var merged []bridge.BallPosition
-
-	// Add TrackNet positions.
-	merged = append(merged, trackNet...)
-
-	// Add YOLO ball detections as BallPositions.
+// ballPositionsFromDetections pulls the ball centers out of YOLO
+// detection results. With the unified model there is exactly one ball
+// source, so this replaces the old TrackNet+YOLO merge.
+func ballPositionsFromDetections(detections []bridge.DetectionResult) []bridge.BallPosition {
+	var out []bridge.BallPosition
 	for _, det := range detections {
-		if det.Ball != nil {
-			cx := (det.Ball.X1 + det.Ball.X2) / 2
-			cy := (det.Ball.Y1 + det.Ball.Y2) / 2
-			merged = append(merged, bridge.BallPosition{
-				X:          cx,
-				Y:          cy,
-				Confidence: det.Ball.Confidence,
-				FrameIndex: det.FrameIndex,
-				Source:     "yolo",
-			})
+		if det.Ball == nil {
+			continue
 		}
+		cx := (det.Ball.X1 + det.Ball.X2) / 2
+		cy := (det.Ball.Y1 + det.Ball.Y2) / 2
+		out = append(out, bridge.BallPosition{
+			X:          cx,
+			Y:          cy,
+			Confidence: det.Ball.Confidence,
+			FrameIndex: det.FrameIndex,
+			Source:     "yolo",
+		})
 	}
-
-	return merged
+	return out
 }
 
 // groupShotsIntoPoints splits a sequence of shots into groups, where each

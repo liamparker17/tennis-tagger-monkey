@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sys
+import time
 import traceback
 from typing import Any, Optional
 
@@ -93,7 +94,6 @@ class BridgeServer:
     def __init__(self) -> None:
         self.detector: Optional[Any] = None
         self.pose: Optional[Any] = None
-        self.classifier: Optional[Any] = None
         self.analyzer: Optional[Any] = None
         self.score: Optional[Any] = None
         self.trainer: Optional[Any] = None
@@ -114,43 +114,25 @@ class BridgeServer:
 
         from ml.detector import Detector
         from ml.pose import PoseEstimator
-        from ml.classifier import StrokeClassifier
         from ml.analyzer import Analyzer
         from ml.score import ScoreTracker
         from ml.trainer import Trainer
 
         detector_backend = params.get("DetectorBackend", "yolo")
-        classifier_name = params.get("ClassifierModel", "3dcnn")
 
-        detector_models = {"yolo": "yolov8s.pt", "yolov5": "yolov5s.pt"}
-        classifier_models = {"3dcnn": "stroke_3dcnn.pt", "lstm": "stroke_lstm.pt"}
+        detector_models = {"yolo": "yolo12n.pt", "yolov5": "yolov5s.pt", "yolov8s": "yolov8s.pt"}
 
-        detector_model = os.path.join(models_dir, detector_models.get(detector_backend, "yolov8s.pt"))
-        classifier_model = os.path.join(models_dir, classifier_models.get(classifier_name, "stroke_3dcnn.pt"))
+        detector_weights = detector_models.get(detector_backend, "yolo12n.pt")
+        _detector_abs = os.path.join(models_dir, detector_weights)
+        # If weights aren't on disk, pass the bare filename so ultralytics auto-downloads
+        # from its GitHub release into its cache.
+        detector_model = _detector_abs if os.path.exists(_detector_abs) else detector_weights
 
         self.detector = Detector(model_path=detector_model, device=device, backend=detector_backend)
         self.pose = PoseEstimator(device=device)
-        try:
-            self.classifier = StrokeClassifier(model_path=classifier_model, device=device, model_type=classifier_name)
-        except FileNotFoundError:
-            logger.warning("Stroke classifier weights not found at %s — stroke classification disabled", classifier_model)
-            self.classifier = None
         self.analyzer = Analyzer()
         self.score = ScoreTracker(device="cpu" if device == "auto" else device)
         self.trainer = Trainer(models_dir=models_dir, device=device)
-
-        from ml.tracknet import TrackNetDetector
-        # Prefer WASB TrackNetV2 tennis weights (best accuracy), then BallTrackerNet
-        tracknet_candidates = [
-            os.path.join(models_dir, "tracknetv2_tennis_wasb.pt"),
-            os.path.join(models_dir, "yastrebksv_tracknet.pt"),
-            os.path.join(models_dir, "tracknet_v2.pt"),
-        ]
-        tracknet_model = next((p for p in tracknet_candidates if os.path.exists(p)), None)
-        self.tracknet = TrackNetDetector(
-            model_path=tracknet_model,
-            device=device,
-        )
 
         self._initialised = True
         logger.info("All ML modules initialised")
@@ -165,6 +147,7 @@ class BridgeServer:
         if not frames_data:
             return []
 
+        t0 = time.perf_counter()
         shm_path = params.get("shm_path")
         if shm_path:
             # Shared memory mode: read all frames from single file
@@ -180,113 +163,60 @@ class BridgeServer:
         else:
             # Base64 fallback
             batch = [_decode_frame(f) for f in frames_data]
+        t_decode = time.perf_counter()
 
-        return self.detector.detect_batch(batch)
+        results = self.detector.detect_batch(batch)
+        t_infer = time.perf_counter()
 
-    # ---- RPC: tracknet_batch ----------------------------------------------
-
-    def rpc_tracknet_batch(self, params: dict) -> Any:
-        """Run TrackNet ball detection on a batch of frames.
-
-        Reads frames from shared memory (same layout as rpc_detect_batch),
-        builds background reference on first call, assembles every-other-frame
-        diff triplets [N-4, N-2, N] starting at index 4, and returns per-frame
-        ball detections.
-
-        Returns:
-            List of {"frame_index": int, "ball": {"x": float, "y": float,
-            "confidence": float} | null}
-        """
-        self._require_init()
-
-        frames_data = params.get("frames", [])
-        if not frames_data:
-            return []
-
-        shm_path = params.get("shm_path")
-        if shm_path:
-            batch = []
-            with open(shm_path, "rb") as f:
-                for meta in frames_data:
-                    f.seek(meta["offset"])
-                    raw = f.read(meta["size"])
-                    arr = np.frombuffer(raw, dtype=np.uint8).reshape(
-                        (meta["height"], meta["width"], 3)
-                    )
-                    # frombuffer returns a read-only array — make a writable copy
-                    batch.append(arr.copy())
-        else:
-            batch = [_decode_frame(f) for f in frames_data]
-
-        from ml.tracknet import BackgroundSubtractor
-
-        # Build background reference from batch ONLY if not already set
-        # by a prior set_background_reference call
-        if not hasattr(self, "_bg_subtractor") or self._bg_subtractor is None:
-            self._bg_subtractor = BackgroundSubtractor()
-        if not self._bg_subtractor.is_ready:
-            logger.warning("Background reference not pre-set, building from batch (suboptimal)")
-            ref_frames = batch[:30] if len(batch) >= 30 else batch
-            self._bg_subtractor.build_reference(ref_frames)
-
-        # Background-subtract frames for BallTrackerNet (yastrebksv).
-        # WASB TrackNetV2 was trained on raw frames — skip subtraction.
-        if self.tracknet._is_wasb:
-            frames_for_detection = batch
-        else:
-            subtracted = [self._bg_subtractor.subtract(f) for f in batch]
-            frames_for_detection = subtracted
-
-        # Build diff triplets for every frame >= 4 using [i-4, i-2, i]
-        # (triplet indices still skip by 2, matching TrackNet's temporal design)
-        results = []
-        for i in range(len(frames_for_detection)):
-            if i < 4:
-                results.append({"frame_index": i, "ball": None})
-                continue
-            triplet = [frames_for_detection[i - 4], frames_for_detection[i - 2], frames_for_detection[i]]
-            detections = self.tracknet.detect_batch([triplet])
-            ball = detections[0] if detections else None
-            results.append({"frame_index": i, "ball": ball})
-
+        logger.info(
+            "detect_batch profile: n=%d decode_ms=%.1f infer_ms=%.1f total_ms=%.1f",
+            len(batch),
+            (t_decode - t0) * 1000,
+            (t_infer - t_decode) * 1000,
+            (t_infer - t0) * 1000,
+        )
         return results
 
-    # ---- RPC: set_background_reference ------------------------------------
+    # ---- RPC: detect_court ------------------------------------------------
 
-    def rpc_set_background_reference(self, params: dict) -> Any:
-        """Build background reference from frames sampled across the full video.
+    def rpc_set_manual_court(self, params: dict) -> Any:
+        """Install user-clicked court corners from the pre-flight sidecar.
 
-        Should be called once before any tracknet_batch calls, typically
-        during the court detection phase.
+        Params: ``{"corners_pixel": [[x,y], ...], "frame_width": int,
+                   "frame_height": int, "near_player": str, "far_player": str}``
+
+        Corners are in NATIVE pixel space (what the user saw when clicking).
+        The analyzer scales them into 640x360 detection space internally so
+        the resulting homography is compatible with TrackNet ball coords,
+        matching ``rpc_detect_court``'s convention.
+
+        Corner order: near_left, near_right, far_right, far_left.
         """
         self._require_init()
-        from ml.tracknet import BackgroundSubtractor
+        native_w = int(params["frame_width"])
+        native_h = int(params["frame_height"])
+        self.analyzer.set_manual_court(
+            corners_pixel=params["corners_pixel"],
+            frame_width=native_w,
+            frame_height=native_h,
+            near_player=params.get("near_player"),
+            far_player=params.get("far_player"),
+        )
 
-        frames_data = params.get("frames", [])
-        if not frames_data:
-            return {"status": "no_frames"}
+        # Mirror rpc_detect_court: rescale the court polygon to 640-wide
+        # detection space before handing it to the YOLO detector for
+        # on-court player filtering.
+        polygon = self.analyzer._manual_court.get("polygon")
+        if polygon is not None:
+            det_w = 640
+            if native_w != det_w and native_w > 0:
+                scale = det_w / native_w
+                scaled = [[int(p[0] * scale), int(p[1] * scale)] for p in polygon]
+                self.detector.set_court_polygon(scaled)
+            else:
+                self.detector.set_court_polygon(polygon)
 
-        shm_path = params.get("shm_path")
-        if shm_path:
-            batch = []
-            with open(shm_path, "rb") as f:
-                for meta in frames_data:
-                    f.seek(meta["offset"])
-                    raw = f.read(meta["size"])
-                    arr = np.frombuffer(raw, dtype=np.uint8).reshape(
-                        (meta["height"], meta["width"], 3)
-                    )
-                    batch.append(arr.copy())
-        else:
-            batch = [_decode_frame(f) for f in frames_data]
-
-        if not hasattr(self, "_bg_subtractor") or self._bg_subtractor is None:
-            self._bg_subtractor = BackgroundSubtractor()
-        self._bg_subtractor.build_reference(batch)
-        logger.info("Background reference built from %d frames", len(batch))
-        return {"status": "ok", "reference_frames": len(batch)}
-
-    # ---- RPC: detect_court ------------------------------------------------
+        return {"ok": True, "method": "manual_preflight"}
 
     def rpc_detect_court(self, params: dict) -> Any:
         """Detect court boundaries in a single frame.
@@ -385,26 +315,6 @@ class BridgeServer:
         native_corners = (src / np.float32([scale_x, scale_y])).tolist()
         result["corners"] = native_corners
         return result
-
-    # ---- RPC: classify_strokes --------------------------------------------
-
-    def rpc_classify_strokes(self, params: dict) -> Any:
-        """Classify stroke types from video clips."""
-        self._require_init()
-        clips_data = params.get("clips", [])
-        if not clips_data:
-            return []
-
-        # Each clip is {"frames": [frame_dict, ...]}
-        clips = []
-        for clip in clips_data:
-            frames = [_decode_frame(f) for f in clip["frames"]]
-            clips.append(np.stack(frames))
-
-        batch = np.stack(clips)  # (N, T, H, W, 3)
-        if self.classifier is None:
-            return [{"stroke": "unknown", "confidence": 0.0} for _ in clips]
-        return self.classifier.classify(batch)
 
     # ---- RPC: analyze_placements ------------------------------------------
 
@@ -517,9 +427,7 @@ class BridgeServer:
         handlers = {
             "__init__": self.rpc_init,
             "detect_batch": self.rpc_detect_batch,
-            "tracknet_batch": self.rpc_tracknet_batch,
             "detect_court": self.rpc_detect_court,
-            "classify_strokes": self.rpc_classify_strokes,
             "analyze_placements": self.rpc_analyze_placements,
             "segment_rallies": self.rpc_segment_rallies,
             "train": self.rpc_train,
@@ -527,7 +435,6 @@ class BridgeServer:
             "get_versions": self.rpc_get_versions,
             "rollback": self.rpc_rollback,
             "fit_trajectories": self.rpc_fit_trajectories,
-            "set_background_reference": self.rpc_set_background_reference,
         }
         handler = handlers.get(method)
         if handler is None:
