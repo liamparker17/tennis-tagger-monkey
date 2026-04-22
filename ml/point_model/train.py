@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 from .dataset import ClipDataset
-from .splits import split_matches
+from .splits import split_matches, split_clips
 from .model import PointModel, PointModelConfig
 from .losses import compute_losses
 from .metrics import contact_f1, stroke_accuracy, outcome_accuracy
@@ -63,11 +63,33 @@ def train(cfg: TrainConfig) -> dict:
         return {"best_val": float("inf"), "history": []}
     train_m, val_m = split_matches(matches)
     _log(f"matches: {len(matches)} total, {len(train_m)} train, {len(val_m)} val")
-    if not val_m:
+
+    # Single-match fallback: if match-level split left val empty, partition
+    # clips inside the one training match deterministically (hash on
+    # match/stem) so we still get a real val signal instead of val=0.0.
+    train_clip_filter: set[str] | None = None
+    val_clip_filter: set[str] | None = None
+    if not val_m and len(train_m) == 1:
+        only = train_m[0]
+        feat_dir = cfg.features_root / only
+        stems = sorted(p.stem for p in feat_dir.glob("*.npz")) if feat_dir.is_dir() else []
+        if stems:
+            tr, va = split_clips(only, stems)
+            train_clip_filter, val_clip_filter = tr, va
+            val_m = [only]
+            _log(f"single-match fallback: holding out {len(va)}/{len(stems)} "
+                 f"clips from {only} as val (~{len(va)/len(stems):.0%})")
+        else:
+            _log("WARN: no val matches — val_loss will be 0.0 and uninformative. "
+                 "Add a second match or use clip-level splitting to get a real val signal.")
+    elif not val_m:
         _log("WARN: no val matches — val_loss will be 0.0 and uninformative. "
              "Add a second match or use clip-level splitting to get a real val signal.")
-    train_ds = ClipDataset(cfg.clips_root, cfg.features_root, train_m)
-    val_ds   = ClipDataset(cfg.clips_root, cfg.features_root, val_m)
+
+    train_ds = ClipDataset(cfg.clips_root, cfg.features_root, train_m,
+                           clip_filter=train_clip_filter)
+    val_ds   = ClipDataset(cfg.clips_root, cfg.features_root, val_m,
+                           clip_filter=val_clip_filter)
     train_dl = DataLoader(train_ds, cfg.batch_size, shuffle=True,
                           num_workers=cfg.num_workers, collate_fn=_collate)
     val_dl   = DataLoader(val_ds, cfg.batch_size, shuffle=False,
@@ -135,7 +157,7 @@ def train(cfg: TrainConfig) -> dict:
         # Only overwrite best.pt when we have a real val signal. With no val
         # matches, val_loss is 0.0 every epoch and epoch 0 weights would
         # win forever.
-        if val_m and val_loss < best:
+        if len(val_ds) > 0 and val_loss < best:
             best = val_loss
             torch.save({"model": model.state_dict(), "config": model_cfg.__dict__,
                         "val_loss": val_loss, "epoch": ep}, cfg.out_dir / "best.pt")

@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import (
     BOTH, DISABLED, END, HORIZONTAL, LEFT, NORMAL, RIGHT, TOP, Button, Canvas,
-    Entry, Frame, Label, Listbox, PhotoImage, Scale, StringVar, Tk, Toplevel,
-    filedialog, messagebox,
+    Entry, Frame, Label, Listbox, PhotoImage, Scale, Scrollbar, StringVar, Tk,
+    Toplevel, filedialog, messagebox,
 )
 
 import cv2
@@ -73,9 +73,10 @@ class Preflight:
         win_h = min(900, screen_h - 80)
         root.geometry(f"{win_w}x{win_h}")
         root.minsize(min(1100, win_w), min(600, win_h))
-        # Reserve vertical space for top bar, nav, players_frame, and bottom buttons
-        # so the canvas never pushes them off-screen.
-        self.max_canvas_h = max(300, win_h - 360)
+        # Cap the image canvas height so huge videos don't dominate the
+        # viewport. With the scrollable wrapper in place we no longer need
+        # to squeeze the canvas down to keep the save button visible.
+        self.max_canvas_h = max(600, min(win_h - 200, 900))
 
         self.cap = cv2.VideoCapture(str(video_path))
         if not self.cap.isOpened():
@@ -130,25 +131,46 @@ class Preflight:
         self._ball_box_ids: list[int] = []
         self._selected_box_idx: int | None = None
 
+        # ---- Scrollable wrapper so the preflight always fits any monitor.
+        # On short screens or with Windows display scaling the controls +
+        # image canvas would otherwise push Save off the bottom of the window.
+        # Everything below is packed into `body` (the inner frame), not root. ----
+        scroll_canvas = Canvas(root, highlightthickness=0)
+        scrollbar = Scrollbar(root, orient="vertical", command=scroll_canvas.yview)
+        scrollbar.pack(side=RIGHT, fill="y")
+        scroll_canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        body = Frame(scroll_canvas)
+        body_id = scroll_canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>",
+                  lambda _e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all")))
+        scroll_canvas.bind("<Configure>",
+                           lambda e: scroll_canvas.itemconfigure(body_id, width=e.width))
+
+        def _on_mousewheel(event):
+            # Windows delivers ±120 per notch; divide to get ±1 line units.
+            scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
+        root.bind_all("<MouseWheel>", _on_mousewheel)
+
         # ---- Layout ----
         self.title_var = StringVar()
         self.help_var = StringVar()
 
-        top = Frame(root, pady=10)
+        top = Frame(body, pady=10)
         top.pack(fill="x")
         Label(top, textvariable=self.title_var, font=HUGE).pack()
         Label(top, textvariable=self.help_var, font=BIG, fg="#444").pack(pady=(4, 0))
 
         # ---- Navigation: earlier / later frame ----
-        nav = Frame(root, pady=4)
+        nav = Frame(body, pady=4)
         nav.pack(fill="x")
         Label(nav, text="Is this a good frame? If the players aren't visible yet:", font=MED).pack(side=LEFT, padx=20)
         Button(nav, text="< 10 seconds earlier", font=MED, command=lambda: self.jump_seconds(-10)).pack(side=LEFT, padx=4)
         Button(nav, text="10 seconds later >", font=MED, command=lambda: self.jump_seconds(10)).pack(side=LEFT, padx=4)
 
-        # ---- Bottom buttons (packed first with side=BOTTOM so they stay visible
-        # even on short monitors where the canvas would otherwise eat the space) ----
-        btns = Frame(root, pady=10)
+        # ---- Bottom buttons (inside the scrollable body — user scrolls to
+        # reach Save when content overflows the viewport) ----
+        btns = Frame(body, pady=10)
         btns.pack(side="bottom", fill="x")
         self.undo_btn = Button(btns, text="Undo last click", font=BIG, command=self.undo, state=DISABLED)
         self.undo_btn.pack(side=LEFT, padx=20)
@@ -157,17 +179,17 @@ class Preflight:
 
         # ---- Player-name + side-swap section (hidden until corners done).
         # Packed at bottom so it sits just above the button bar and stays on-screen. ----
-        self.players_frame = Frame(root, pady=6)
+        self.players_frame = Frame(body, pady=6)
         self._players_frame_packed = False
 
         # ---- Player-position labeling section (step 6, hidden until corners + names done). ----
-        self.label_frame = Frame(root, pady=6)
+        self.label_frame = Frame(body, pady=6)
 
         # ---- Ball-position labeling section (step 7, hidden until player labels done). ----
-        self.ball_frame = Frame(root, pady=6)
+        self.ball_frame = Frame(body, pady=6)
 
         # ---- Canvas (packed last so it takes only leftover space) ----
-        self.canvas = Canvas(root, bg="#222", highlightthickness=0, cursor="crosshair")
+        self.canvas = Canvas(body, bg="#222", highlightthickness=0, cursor="crosshair")
         self.canvas.pack(fill=BOTH, expand=True, padx=20, pady=8)
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)

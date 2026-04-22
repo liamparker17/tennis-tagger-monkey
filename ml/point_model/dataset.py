@@ -19,7 +19,10 @@ class Sample:
 
 class ClipDataset(Dataset):
     def __init__(self, clips_root: Path, features_root: Path,
-                 match_filter: Optional[list[str]] = None, T_max: int = T_MAX):
+                 match_filter: Optional[list[str]] = None, T_max: int = T_MAX,
+                 clip_filter: Optional[set[str]] = None):
+        """clip_filter: when set, only clips whose stem is in the set are
+        kept. Used by the single-match clip-level val fallback."""
         self.clips_root = clips_root; self.features_root = features_root
         self.T_max = T_max
         self.items: list[tuple[str, dict, Path, Optional[Path]]] = []
@@ -32,7 +35,9 @@ class ClipDataset(Dataset):
             contact_path = d / "contact_labels.json"
             contact_doc = json.loads(contact_path.read_text()) if contact_path.exists() else None
             for p in doc["points"]:
-                npz = features_root / d.name / (Path(p["clip"]).stem + ".npz")
+                stem = Path(p["clip"]).stem
+                if clip_filter is not None and stem not in clip_filter: continue
+                npz = features_root / d.name / (stem + ".npz")
                 if not npz.exists(): continue
                 self.items.append((d.name, p, npz, contact_path if contact_doc else None))
                 p["_contact"] = (contact_doc.get("clips", {}).get(Path(p["clip"]).stem)

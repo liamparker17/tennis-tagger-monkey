@@ -126,6 +126,55 @@ region matching the opponent.
 
 Inspect: `python -m ml.feature_extractor.inspect files/data/features/<match>/p_0001.npz`
 
+## Training notes — how `epochs`, data, and val loss actually interact
+
+One epoch = one pass through every training clip. With 2 matches (~700 clips total,
+~385 train clips after the match-level val split) and batch size 8 that's ~48 gradient
+updates per epoch. Match *duration* is irrelevant; only *clip count* matters.
+
+Empirically, the overfit inflection point moves with dataset size:
+
+| Training clips    | Val bottoms out around | Sensible epoch count |
+|-------------------|------------------------|----------------------|
+| ~385 (1 match)    | ep 5–8                 | 8                    |
+| ~700 (2 matches)  | ep 5–7                 | 8–15                 |
+| 2000+ (6+ matches)| ep 15–25               | 20–40                |
+
+**The default of 20 epochs is intentionally overshooting** — `best.pt` is saved at the
+lowest val epoch regardless of how long the run goes, so you get the best model whether
+the real peak is at ep 5 or ep 25. The wasted compute after the overfit point is
+cosmetic; the shipped model is identical.
+
+**Data variety dominates data volume.** Ten Wimbledon R1 matches all on centre court
+with the same broadcaster will help less than five matches across different tournaments,
+surfaces, and broadcast styles. Player pairs, lighting, and camera angles are the
+dimensions the model generalizes over.
+
+### Single-match val fallback
+
+When `files/data/features/` only contains one match, match-level split
+(`split_matches`) leaves val empty. The trainer then falls back to a clip-level split
+(`split_clips`, hash-deterministic ~20% of clips held out from the one training match)
+so you still get a real val signal. Output looks like:
+
+```
+matches: 1 total, 1 train, 0 val
+single-match fallback: holding out 84/385 clips from <match> as val (~22%)
+```
+
+That val number is an honest benchmark for *single-match* generalization, but it's
+easier than cross-match val because the held-out clips share everything except their
+exact moment in the match. Real cross-match generalization only shows up at ≥2 matches.
+
+### Known failure modes
+
+- **`train=nan` mid-run** with no recovery → gradient explosion; LR or a too-small
+  batch is to blame. `best.pt` is unaffected if saved before the blowup.
+- **Val flat at 0.0** every epoch → no val data. Either empty `files/data/features/`
+  or the clip-level fallback didn't fire. Check the log header.
+- **Val climbing while train drops** → textbook overfit. Expected on small data; the
+  fix is more matches, not regularization.
+
 ## Manual entry points
 
 The launcher drives everything, but each stage is runnable standalone:
@@ -139,8 +188,12 @@ python -m ml.train_yolo --data files/data/yolo_ball/_shared/data.yaml \
     --base models/yolov8s.pt --out files/models/yolo_ball --imgsz 640 --batch 4
 python -m ml.feature_extractor files/data/clips --out files/data/features
 python -m ml.contact_labeler.server --clips files/data/clips     # http://127.0.0.1:8765
-python -m ml.point_model train   files/data/features --out files/models/point_model
-python -m ml.point_model serve   files/models/point_model
+python -m ml.point_model train \
+    --clips files/data/clips --features files/data/features \
+    --out files/models/point_model/current --epochs 20
+python -m ml.point_model eval \
+    --ckpt files/models/point_model/current/best.pt \
+    --clips files/data/clips --features files/data/features
 ```
 
 ## Go CLI
