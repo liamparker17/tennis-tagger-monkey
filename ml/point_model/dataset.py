@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 from .features import build_feature_tensor, FEATURE_DIM
 from .labels import build_targets, Targets
 
-T_MAX = 300
+T_MAX = 900  # 30 s @ 30 fps — long enough for baseline rallies w/o truncation
 
 @dataclass
 class Sample:
@@ -25,7 +25,7 @@ class ClipDataset(Dataset):
         self.items: list[tuple[str, dict, Path, Optional[Path]]] = []
         for d in sorted(clips_root.iterdir()):
             if not d.is_dir(): continue
-            if match_filter and d.name not in match_filter: continue
+            if match_filter is not None and d.name not in match_filter: continue
             labels_path = d / "labels.json"
             if not labels_path.exists(): continue
             doc = json.loads(labels_path.read_text())
@@ -59,10 +59,14 @@ class ClipDataset(Dataset):
         strong_pairs = [(int(e["frame"]), int(e["hitter"])) for e in strong] if strong else None
         targets = build_targets(
             T=Tm, fps=int(z["fps"]),
-            stroke_count=int(p["stroke_count"]),
-            stroke_types=list(p["stroke_types"]),
-            winner_or_error=p["winner_or_error"],
-            point_won_by=p["point_won_by"], server=p["server"],
+            stroke_count_lo=int(p.get("stroke_count_lo", 0)),
+            stroke_count_hi=int(p.get("stroke_count_hi", 0)),
+            stroke_types=list(p.get("stroke_types", [])),
+            outcome=p.get("outcome", "UnforcedError"),
+            point_won_by=p.get("point_won_by", ""),
+            server=p.get("server", ""),
+            player_a=p.get("player_a", ""),
+            player_b=p.get("player_b", ""),
             strong_contact_frames=strong_pairs,
         )
         return {"features": out, "mask": mask, "targets": targets,

@@ -12,4 +12,4 @@ def test_feature_dim():
         audio_mel=np.zeros((64, T*2), np.float32),
         clip_meta=np.array([1.0, 1280, 720, 30.0], np.float32),
     )
-    assert feats.shape == (T, FEATURE_DIM) == (T, 243)
+    assert feats.shape == (T, FEATURE_DIM)

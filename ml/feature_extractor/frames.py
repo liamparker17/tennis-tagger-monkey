@@ -3,12 +3,14 @@ import subprocess
 from pathlib import Path
 import numpy as np
 
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 def probe_wh(path: Path) -> tuple[int, int, float]:
     r = subprocess.run([
         "ffprobe","-v","error","-select_streams","v:0",
         "-show_entries","stream=width,height,r_frame_rate",
         "-of","default=nw=1:nk=1", str(path)
-    ], capture_output=True, text=True, check=True)
+    ], capture_output=True, text=True, check=True, creationflags=_NO_WINDOW)
     w, h, rate = r.stdout.strip().splitlines()
     num, den = rate.split("/")
     fps = float(num) / float(den) if float(den) != 0 else float(num)
@@ -21,7 +23,7 @@ def iter_frames(path: Path, fps: int = 30):
         "-i", str(path),
         "-vf", f"fps={fps}",
         "-f","rawvideo","-pix_fmt","bgr24","-"
-    ], stdout=subprocess.PIPE)
+    ], stdout=subprocess.PIPE, creationflags=_NO_WINDOW)
     bytes_per_frame = w * h * 3
     while True:
         buf = proc.stdout.read(bytes_per_frame)

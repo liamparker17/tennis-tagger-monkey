@@ -12,7 +12,7 @@ class PointModelConfig:
     n_heads: int = 8
     ffn_dim: int = 1024
     dropout: float = 0.1
-    max_T: int = 300
+    max_T: int = 900
     n_shots: int = MAX_SHOTS
 
 class PointModel(nn.Module):

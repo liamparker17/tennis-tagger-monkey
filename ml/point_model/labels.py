@@ -4,7 +4,7 @@ from typing import Optional
 import numpy as np
 from .vocab import stroke_index, outcome_index, STROKE_PAD_INDEX
 
-MAX_SHOTS = 4
+MAX_SHOTS = 5  # serve, return, srv+1, ret+1, last_shot
 
 @dataclass
 class Targets:
@@ -16,17 +16,54 @@ class Targets:
     outcome_idx: int
     server_is_p1: bool
 
-def _alternate_hitters(server_is_p1: bool, n: int) -> list[int]:
-    near = 0 if server_is_p1 else 1
-    return [near if (i % 2 == 0) else 1 - near for i in range(n)]
 
-def build_targets(*, T: int, fps: int, stroke_count: int, stroke_types: list[str],
-                  winner_or_error: str, point_won_by: str, server: str,
+def _alternate_hitters(server_is_p1: bool, n: int) -> list[int]:
+    """Returns a list of length n alternating between 0 and 1, where the
+    value at each index identifies which HUMAN hit that shot (0 = player_a
+    = P1, 1 = player_b = P2). Server hits first and the two players
+    alternate after that. Human identity, not court position — this must
+    agree with the identity axis used by the pose features (idx 0 of
+    pose_px/pose_conf is player_a, idx 1 is player_b)."""
+    first = 0 if server_is_p1 else 1
+    return [first if (i % 2 == 0) else 1 - first for i in range(n)]
+
+
+def _server_is_p1(server: str, player_a: str, player_b: str) -> bool:
+    """P1 = player_a by project convention. Compare by name; fall back to
+    the literal 'P1' sentinel if names are missing."""
+    s = server.strip().lower()
+    a = player_a.strip().lower()
+    b = player_b.strip().lower()
+    if a and s == a: return True
+    if b and s == b: return False
+    return s == "p1"
+
+
+def _estimate_stroke_count(lo: int, hi: int, stroke_types: list[str]) -> int:
+    """Dartfish reports a stroke-count bucket like '1 to 4'. Use the number
+    of actual tagged strokes when it falls inside the bucket, else use the
+    midpoint. Clamp to [1, MAX_SHOTS]."""
+    n_tagged = len(stroke_types)
+    if lo > 0 and hi >= lo and lo <= n_tagged <= hi:
+        n = n_tagged
+    elif lo > 0 and hi >= lo:
+        n = (lo + hi) // 2
+    else:
+        n = n_tagged
+    return max(1, min(n, MAX_SHOTS))
+
+
+def build_targets(*, T: int, fps: int,
+                  stroke_count_lo: int, stroke_count_hi: int,
+                  stroke_types: list[str],
+                  outcome: str, point_won_by: str,
+                  server: str, player_a: str, player_b: str,
                   strong_contact_frames: Optional[list[tuple[int, int]]]) -> Targets:
     contact = np.zeros((T,), np.int64)
     hitter_pf = np.full((T,), -1, np.int64)
-    server_is_p1 = (server.strip() == "P1")
-    n = max(0, min(stroke_count, MAX_SHOTS, T))
+    server_is_p1 = _server_is_p1(server, player_a, player_b)
+    n = _estimate_stroke_count(stroke_count_lo, stroke_count_hi, stroke_types)
+    n = min(n, T)
     seq = _alternate_hitters(server_is_p1, n)
 
     if strong_contact_frames:
@@ -51,6 +88,6 @@ def build_targets(*, T: int, fps: int, stroke_count: int, stroke_types: list[str
     return Targets(
         contact_frames=contact, hitter_per_frame=hitter_pf,
         contact_strong=strong, stroke_idx=stroke_idx,
-        hitter_per_shot=hitter_ps, outcome_idx=outcome_index(winner_or_error),
+        hitter_per_shot=hitter_ps, outcome_idx=outcome_index(outcome),
         server_is_p1=server_is_p1,
     )

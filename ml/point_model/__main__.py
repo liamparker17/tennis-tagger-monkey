@@ -13,6 +13,8 @@ def main(argv=None) -> int:
     pt.add_argument("--out", type=Path, default=Path("files/models/point_model/run0"))
     pt.add_argument("--epochs", type=int, default=20)
     pt.add_argument("--batch-size", type=int, default=8)
+    pt.add_argument("--resume", type=Path, default=None,
+                    help="Path to a last.pt/best.pt to resume from")
 
     pe = sub.add_parser("eval")
     pe.add_argument("--ckpt", type=Path, required=True)
@@ -22,7 +24,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "train":
         r = train(TrainConfig(args.clips, args.features, args.out,
-                              epochs=args.epochs, batch_size=args.batch_size))
+                              epochs=args.epochs, batch_size=args.batch_size,
+                              resume=args.resume))
         print(json.dumps(r["best_val"]))
     elif args.cmd == "eval":
         r = evaluate(args.ckpt, args.clips, args.features)

@@ -1,10 +1,16 @@
 from __future__ import annotations
-import json, time
+import json, sys, time
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+
+# pythonw.exe (used by the GUI wrapper) drops stdout, so route status lines
+# through stderr and flush every print. Makes training progress visible in
+# the pipeline log instead of disappearing into the void.
+def _log(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
 from .dataset import ClipDataset
 from .splits import split_matches
 from .model import PointModel, PointModelConfig
@@ -22,6 +28,7 @@ class TrainConfig:
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
     num_workers: int = 2
+    resume: Path | None = None  # if set, load model+opt state and continue from next epoch
 
 def _to_targets(batch, device):
     Tg = batch["targets"]
@@ -44,9 +51,21 @@ def _collate(items):
 
 def train(cfg: TrainConfig) -> dict:
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Skip underscore-prefixed dirs (e.g. _smoke, _shared) — they are test
+    # fixtures or cross-match scratch spaces, not real matches. Including
+    # them in val produced a 5-orders-of-magnitude train/val gap because the
+    # fixture labels are placeholders, not real supervision.
     matches = sorted(d.name for d in cfg.clips_root.iterdir() if d.is_dir()
+                     and not d.name.startswith("_")
                      and (d / "labels.json").exists())
+    if not matches:
+        _log(f"no real matches found under {cfg.clips_root} — nothing to train on")
+        return {"best_val": float("inf"), "history": []}
     train_m, val_m = split_matches(matches)
+    _log(f"matches: {len(matches)} total, {len(train_m)} train, {len(val_m)} val")
+    if not val_m:
+        _log("WARN: no val matches — val_loss will be 0.0 and uninformative. "
+             "Add a second match or use clip-level splitting to get a real val signal.")
     train_ds = ClipDataset(cfg.clips_root, cfg.features_root, train_m)
     val_ds   = ClipDataset(cfg.clips_root, cfg.features_root, val_m)
     train_dl = DataLoader(train_ds, cfg.batch_size, shuffle=True,
@@ -54,14 +73,42 @@ def train(cfg: TrainConfig) -> dict:
     val_dl   = DataLoader(val_ds, cfg.batch_size, shuffle=False,
                           num_workers=cfg.num_workers, collate_fn=_collate)
 
-    model = PointModel(PointModelConfig()).to(device)
+    model_cfg = PointModelConfig()
+    model = PointModel(model_cfg).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     best = float("inf")
     history = []
+    start_epoch = 0
 
-    for ep in range(cfg.epochs):
+    if cfg.resume is not None and cfg.resume.exists():
+        ck = torch.load(cfg.resume, map_location=device)
+        try:
+            model.load_state_dict(ck["model"])
+        except RuntimeError as e:
+            # Architecture changed since the checkpoint was saved (different
+            # seq length, feature dim, or head count). Rather than crashing
+            # the pipeline, archive the stale checkpoint and start fresh.
+            stale = cfg.resume.with_suffix(cfg.resume.suffix + ".stale_arch")
+            cfg.resume.rename(stale)
+            _log(f"checkpoint arch mismatch — archived {cfg.resume.name} -> {stale.name}")
+            _log(f"  ({str(e).splitlines()[0]})")
+            _log("starting fresh.")
+        else:
+            if "optimizer" in ck:
+                opt.load_state_dict(ck["optimizer"])
+            start_epoch = int(ck.get("epoch", -1)) + 1
+            best = float(ck.get("best_val", best))
+            history = list(ck.get("history", []))
+            _log(f"resuming from {cfg.resume} @ epoch {start_epoch}, best_val={best:.3f}")
+
+    if start_epoch >= cfg.epochs:
+        _log(f"checkpoint already at epoch {start_epoch}/{cfg.epochs}. "
+             f"nothing to do — reset the run or raise --epochs.")
+        return {"best_val": best, "history": history}
+
+    for ep in range(start_epoch, cfg.epochs):
         model.train(); t0 = time.time(); train_loss = 0.0; n = 0
         for batch in train_dl:
             x = batch["features"].to(device); m = batch["mask"].to(device)
@@ -84,11 +131,20 @@ def train(cfg: TrainConfig) -> dict:
 
         history.append({"epoch": ep, "train_loss": train_loss, "val_loss": val_loss,
                         "secs": time.time() - t0})
-        print(f"ep {ep} train={train_loss:.3f} val={val_loss:.3f}")
-        if val_loss < best:
+        _log(f"ep {ep} train={train_loss:.3f} val={val_loss:.3f}")
+        # Only overwrite best.pt when we have a real val signal. With no val
+        # matches, val_loss is 0.0 every epoch and epoch 0 weights would
+        # win forever.
+        if val_m and val_loss < best:
             best = val_loss
-            torch.save({"model": model.state_dict(), "config": PointModelConfig().__dict__,
-                        "val_loss": val_loss}, cfg.out_dir / "best.pt")
+            torch.save({"model": model.state_dict(), "config": model_cfg.__dict__,
+                        "val_loss": val_loss, "epoch": ep}, cfg.out_dir / "best.pt")
+        torch.save({"model": model.state_dict(),
+                    "optimizer": opt.state_dict(),
+                    "config": model_cfg.__dict__,
+                    "epoch": ep, "val_loss": val_loss,
+                    "best_val": best, "history": history},
+                   cfg.out_dir / "last.pt")
 
     (cfg.out_dir / "metrics.json").write_text(json.dumps({"history": history,
                                                            "best_val": best}, indent=2))

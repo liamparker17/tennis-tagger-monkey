@@ -16,8 +16,75 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import END, filedialog, messagebox, ttk
+
+
+# Prefer console-attached python.exe over pythonw.exe for child processes so
+# stdout/stderr is captured reliably by the log pipe. Also force unbuffered
+# I/O via -u — pythonw-launched children otherwise block-buffer stdout and
+# their output (including tracebacks) vanishes when they crash.
+def _child_python() -> str:
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe":
+        sibling = exe.with_name("python.exe")
+        if sibling.is_file():
+            return str(sibling)
+    return sys.executable
+
+
+PYEXE = _child_python()
+
+
+def _timestamp() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _estimate_total_points(pairs_root: Path) -> int:
+    """Rough total: body rows across every Dartfish CSV under each match."""
+    total = 0
+    if not pairs_root.is_dir():
+        return 0
+    for match in pairs_root.iterdir():
+        if not match.is_dir():
+            continue
+        for csv in match.glob("*.csv"):
+            try:
+                with csv.open("r", encoding="utf-8", errors="replace") as f:
+                    n = sum(1 for _ in f)
+                total += max(0, n - 1)  # minus header
+            except OSError:
+                pass
+    return total
+
+
+def _points_in_match(match_dir: Path) -> int:
+    for csv in match_dir.glob("*.csv"):
+        try:
+            with csv.open("r", encoding="utf-8", errors="replace") as f:
+                return max(0, sum(1 for _ in f) - 1)
+        except OSError:
+            continue
+    return 0
+
+
+def _count_clips(clips_root: Path) -> int:
+    if not clips_root.is_dir():
+        return 0
+    return sum(1 for _ in clips_root.glob("*/p_*.mp4"))
+
+
+_EPOCH_RE = __import__("re").compile(r"^ep (\d+)", __import__("re").MULTILINE)
+
+def _last_epoch_from_log(text: str) -> int:
+    last = -1
+    for m in _EPOCH_RE.finditer(text):
+        try:
+            last = max(last, int(m.group(1)))
+        except ValueError:
+            pass
+    return last
 
 REPO = Path(__file__).resolve().parent
 TAGGER_EXE = REPO / "tagger.exe"
@@ -277,15 +344,35 @@ class App:
             command=self.show_add_intro,
         ).pack(fill="x", pady=8)
 
+        last_ckpt = REPO / "files" / "models" / "point_model" / "current" / "last.pt"
+        n_matches = sum(1 for p in TRAINING_PAIRS_DIR.iterdir() if p.is_dir()) \
+            if TRAINING_PAIRS_DIR.is_dir() else 0
+        if n_matches > 0:
+            if last_ckpt.exists():
+                title = "Resume point-model training"
+                subtitle = (f"Picks up from the last saved epoch. "
+                            f"{n_matches} match{'es' if n_matches != 1 else ''} "
+                            f"in the training folder.")
+            else:
+                title = "Train the point model"
+                subtitle = (f"Cuts clips, extracts features, and trains from "
+                            f"{n_matches} match{'es' if n_matches != 1 else ''} "
+                            f"already in the training folder. Takes hours — "
+                            f"good to start before you step away.")
+            OptionButton(
+                wrap, title=title, subtitle=subtitle,
+                command=self._begin_point_model_training,
+            ).pack(fill="x", pady=8)
+
         # Small 'Advanced' link in the footer area
         adv = tk.Frame(wrap, bg=BG)
         adv.pack(fill="x", pady=(24, 0))
         tk.Label(adv, text="Advanced:", font=FONT_SUB, fg=TEXT_DIM, bg=BG
                  ).pack(side="left")
-        ttk.Button(adv, text="Build training labels", style="Ghost.TButton",
-                   command=self.show_adv_labels).pack(side="left", padx=(8, 0))
-        ttk.Button(adv, text="Train the ball finder", style="Ghost.TButton",
-                   command=self.show_adv_train).pack(side="left", padx=(4, 0))
+        ttk.Button(adv, text="Build labels + train ball finder", style="Ghost.TButton",
+                   command=self.show_adv_labels_then_train).pack(side="left", padx=(8, 0))
+        ttk.Button(adv, text="Manage training set", style="Ghost.TButton",
+                   command=self.show_manage_training).pack(side="left", padx=(4, 0))
 
     # ---- Path A: Tag a new match ----
 
@@ -569,20 +656,90 @@ class App:
                  ).pack(fill="x", pady=(0, 24))
 
         OptionButton(
-            wrap, title="Add it to the training set",
-            subtitle="Copies the two files so the model can learn from this match later.",
-            command=self._do_add, primary=True,
+            wrap, title="Continue to setup →",
+            subtitle="Next: mark the court and players so the model learns from "
+                     "consistent coordinates.",
+            command=self.show_add_setup, primary=True,
         ).pack(fill="x", pady=6)
+
+    def show_add_setup(self) -> None:
+        self._clear_body()
+        self._show_back(step_text="Setup the match")
+        video = self.state["video"]
+
+        wrap = tk.Frame(self.body, bg=BG)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text="Mark the court and name the players",
+                 font=FONT_QUESTION, fg=TEXT, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(20, 6))
+        tk.Label(wrap,
+                 text=f"{Path(video).name}\n\n"
+                      "Click the 4 corners of the court and type the two players' names. "
+                      "This anchors every clip in the same coordinates so the model can "
+                      "learn player identity, court positions, and side-swap timing from "
+                      "consistent labels.",
+                 font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w",
+                 wraplength=900, justify="left"
+                 ).pack(fill="x", pady=(0, 20))
+
+        OptionButton(
+            wrap, title="Open the setup window",
+            subtitle="A separate window opens. When you're done, come back here and press continue.",
+            command=self._on_add_open_setup, primary=True,
+        ).pack(fill="x", pady=6)
+
+        self._add_setup_continue_btn = ttk.Button(
+            wrap, text="I finished setup — copy into training set",
+            style="Accent.TButton",
+            command=self._on_add_setup_continue, state="disabled",
+        )
+        self._add_setup_continue_btn.pack(anchor="w", pady=(20, 0))
+
+    def _on_add_open_setup(self) -> None:
+        video = self.state["video"]
+        if not PREFLIGHT_SCRIPT.exists():
+            messagebox.showerror("Missing file", "preflight.py is missing.")
+            return
+        try:
+            subprocess.Popen([sys.executable, str(PREFLIGHT_SCRIPT), video],
+                             cwd=str(REPO))
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Couldn't open setup", str(exc))
+            return
+        self._add_setup_continue_btn.config(state="normal")
+        self._poll_add_sidecar()
+
+    def _poll_add_sidecar(self) -> None:
+        video = self.state.get("video")
+        if not video:
+            return
+        if Path(video + ".setup.json").exists():
+            self._add_setup_continue_btn.config(
+                text="✓ Setup saved — copy into training set")
+            return
+        self.root.after(1000, self._poll_add_sidecar)
+
+    def _on_add_setup_continue(self) -> None:
+        if not Path(self.state["video"] + ".setup.json").exists():
+            messagebox.showwarning(
+                "Not saved yet",
+                "I can't find the setup file. Finish the setup window and press Save there first.")
+            return
+        self._do_add()
 
     def _do_add(self) -> None:
         video = Path(self.state["video"])
         csv_path = Path(self.state["csv"])
+        sidecar = Path(self.state["video"] + ".setup.json")
         stamp = video.stem
         dest = TRAINING_PAIRS_DIR / stamp
         try:
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(video, dest / video.name)
             shutil.copy2(csv_path, dest / csv_path.name)
+            if sidecar.exists():
+                shutil.copy2(sidecar, dest / (video.name + ".setup.json"))
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Couldn't copy files", str(exc))
             return
@@ -613,12 +770,23 @@ class App:
             command=self.show_add_pick_video, primary=True,
         ).pack(fill="x", pady=6)
 
+        run_dir = REPO / "files" / "models" / "point_model" / "current"
+        resume_hint = " (resumes if a checkpoint exists)" if (run_dir / "last.pt").exists() else ""
+
         OptionButton(
-            wrap, title="Build training labels from the whole folder",
-            subtitle="Runs the label builder over every match in the training folder. "
+            wrap, title="Begin training the point model" + resume_hint,
+            subtitle="Cuts clips, extracts features, and trains the multi-task "
+                     "point model over every match in the training folder. "
                      "Takes hours — good to start before you step away.",
-            command=self._build_labels_from_training_dir,
+            command=self._begin_point_model_training,
         ).pack(fill="x", pady=6)
+
+        if (run_dir / "last.pt").exists():
+            OptionButton(
+                wrap, title="Reset training (start fresh next time)",
+                subtitle="Deletes the active checkpoint. Keeps clips and features.",
+                command=self._reset_point_model_training,
+            ).pack(fill="x", pady=6)
 
         OptionButton(
             wrap, title="Go home",
@@ -626,8 +794,333 @@ class App:
             command=self.show_home,
         ).pack(fill="x", pady=6)
 
-    def _build_labels_from_training_dir(self) -> None:
+    def _begin_point_model_training(self) -> None:
+        if not TRAINING_PAIRS_DIR.is_dir():
+            messagebox.showerror("No training folder",
+                                 "The training folder doesn't exist yet. "
+                                 "Add a pre-tagged match first.")
+            return
+        self._show_pick_matches_to_train()
+
+    def _show_pick_matches_to_train(self) -> None:
+        self._clear_body()
+        self._show_back(step_text="Pick matches")
+
+        wrap = tk.Frame(self.body, bg=BG)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text="Which matches should we train on?",
+                 font=FONT_QUESTION, fg=TEXT, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(20, 6))
+        tk.Label(wrap,
+                 text="All selected by default. Uncheck any you want to leave out — "
+                      "their clips and features stay on disk and can be added back later.",
+                 font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w",
+                 wraplength=900, justify="left"
+                 ).pack(fill="x", pady=(0, 16))
+
+        matches = sorted((d for d in TRAINING_PAIRS_DIR.iterdir() if d.is_dir()),
+                         key=lambda d: d.name)
+        if not matches:
+            tk.Label(wrap, text="(no matches in the training folder)",
+                     font=FONT_SUB, fg=TEXT_DIM, bg=BG
+                     ).pack(anchor="w", pady=(20, 0))
+            return
+
+        box = tk.Frame(wrap, bg=PANEL, highlightthickness=1,
+                       highlightbackground=BORDER)
+        box.pack(fill="both", expand=True, pady=(0, 12))
+        canvas = tk.Canvas(box, bg=PANEL, bd=0, highlightthickness=0)
+        sb = tk.Scrollbar(box, orient="vertical", command=canvas.yview,
+                          bg=PANEL, troughcolor=BG, bd=0, activebackground=PANEL_HI)
+        inner = tk.Frame(canvas, bg=PANEL)
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        vars_: list[tuple[Path, tk.BooleanVar]] = []
+        for m in matches:
+            v = tk.BooleanVar(value=True)
+            vars_.append((m, v))
+            csvs = list(m.glob("*.csv"))
+            n_points = 0
+            if csvs:
+                try:
+                    with csvs[0].open("r", encoding="utf-8", errors="replace") as f:
+                        n_points = max(0, sum(1 for _ in f) - 1)
+                except OSError:
+                    pass
+            row = tk.Frame(inner, bg=PANEL)
+            row.pack(fill="x", padx=12, pady=4)
+            cb = tk.Checkbutton(row, variable=v, bg=PANEL, fg=TEXT,
+                                activebackground=PANEL, activeforeground=TEXT,
+                                selectcolor=PANEL_HI, bd=0, highlightthickness=0)
+            cb.pack(side="left")
+            tk.Label(row, text=m.name, font=FONT_OPTION, fg=TEXT, bg=PANEL,
+                     anchor="w").pack(side="left", padx=(8, 12))
+            tk.Label(row, text=f"{n_points} points", font=FONT_SUB,
+                     fg=TEXT_DIM, bg=PANEL, anchor="e"
+                     ).pack(side="right")
+
+        btns = tk.Frame(wrap, bg=BG)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Continue →", style="Accent.TButton",
+                   command=lambda: self._continue_with_selection(vars_)
+                   ).pack(side="right")
+        ttk.Button(btns, text="Select all", style="Ghost.TButton",
+                   command=lambda: [v.set(True) for _, v in vars_]
+                   ).pack(side="left")
+        ttk.Button(btns, text="Clear", style="Ghost.TButton",
+                   command=lambda: [v.set(False) for _, v in vars_]
+                   ).pack(side="left", padx=(6, 0))
+
+    def _continue_with_selection(self,
+                                 vars_: list[tuple[Path, tk.BooleanVar]]) -> None:
+        selected = [m for m, v in vars_ if v.get()]
+        if not selected:
+            messagebox.showerror("No matches selected",
+                                 "Pick at least one match to train on.")
+            return
+        self._launch_point_model_chain(selected)
+
+    def _launch_point_model_chain(self, selected: list[Path]) -> None:
+        clips_dir = REPO / "files" / "data" / "clips"
+        features_dir = REPO / "files" / "data" / "features"
+        run_dir = REPO / "files" / "models" / "point_model" / "current"
+        last_ckpt = run_dir / "last.pt"
+
+        subtitle = ("Stages run back-to-back: (1) fine-tune the ball detector "
+                    "from your preflight labels — one-off, skipped once the "
+                    "weights exist; (2) cut clips from every Dartfish CSV; "
+                    "(3) extract per-frame features; (4) train the multi-task "
+                    "point model. Already-cut clips and already-extracted "
+                    "features are skipped automatically. Takes hours on a real "
+                    "dataset — leave the window open overnight.")
+
+        train_cmd = [PYEXE, "-u", "-m", "ml.point_model", "train",
+                     "--clips", str(clips_dir),
+                     "--features", str(features_dir),
+                     "--out", str(run_dir)]
+        if last_ckpt.exists():
+            train_cmd += ["--resume", str(last_ckpt)]
+            subtitle = (f"Resuming from {last_ckpt.name} in "
+                        f"{run_dir.relative_to(REPO)}.\n\n" + subtitle)
+
+        total_points = sum(_points_in_match(m) for m in selected)
+        selected_names = [m.name for m in selected]
+        epochs_target = 20  # matches ml.point_model default
+
+        # Chain: [ball-yolo prep + train if weights missing], then
+        # clips(match1), features(match1), clips(match2), features(match2), …, train
+        argvs: list[list[str]] = []
+        ball_weights = REPO / "files" / "models" / "yolo_ball" / "best.pt"
+        ball_yolo_out = REPO / "files" / "data" / "yolo_ball"
+        n_ball_stages = 0
+        if not ball_weights.exists():
+            argvs.append([PYEXE, "-u", "-m", "ml.ball_labels_to_yolo",
+                          "--pairs-dir", str(TRAINING_PAIRS_DIR),
+                          "--output-dir", str(ball_yolo_out)])
+            argvs.append([PYEXE, "-u", "-m", "ml.train_yolo",
+                          "--data", str(ball_yolo_out / "_shared" / "data.yaml"),
+                          "--base", str(REPO / "models" / "yolov8s.pt"),
+                          "--out", str(REPO / "files" / "models" / "yolo_ball"),
+                          "--imgsz", "640", "--batch", "4"])
+            n_ball_stages = 2
+        for m in selected:
+            argvs.append([PYEXE, "-u", "-m", "ml.dartfish_to_clips",
+                          str(TRAINING_PAIRS_DIR), "--out", str(clips_dir),
+                          "--only", m.name])
+            argvs.append([PYEXE, "-u", "-m", "ml.feature_extractor",
+                          str(clips_dir), "--out", str(features_dir),
+                          "--only", m.name])
+        argvs.append(train_cmd)
+        n_prep_stages = n_ball_stages + len(selected) * 2  # all non-train stages
+
+        def _count_selected_clips() -> int:
+            return sum(len(list((clips_dir / n).glob("p_*.mp4")))
+                       for n in selected_names)
+
+        def _count_selected_features() -> int:
+            return sum(len(list((features_dir / n).glob("*.npz")))
+                       for n in selected_names)
+
+        def progress_fn(stage_idx, n_stages, log_text):
+            if stage_idx >= n_prep_stages:
+                done = _last_epoch_from_log(log_text)
+                sub = min(1.0, (done + 1) / epochs_target) if done >= 0 else 0.0
+                label = (f"training — epoch {done + 1}/{epochs_target}"
+                         if done >= 0 else "training — starting…")
+                overall = (n_prep_stages + sub) / n_stages
+                return overall, label
+            # One-off ball-YOLO fine-tune (runs only when weights missing).
+            if stage_idx < n_ball_stages:
+                label = ("preparing ball-detector training data"
+                         if stage_idx == 0
+                         else "training ball detector (one-off, ~15–60 min)")
+                return stage_idx / n_stages, label
+            # pre-train: weight clips and features each as half of prep work
+            match_idx = stage_idx - n_ball_stages
+            clips_n = _count_selected_clips()
+            feat_n = _count_selected_features()
+            prep_done = (clips_n + feat_n) / max(total_points * 2, 1)
+            prep_frac = (n_ball_stages + min(1.0, prep_done) *
+                         (len(selected) * 2)) / n_stages
+            phase = ("cutting clips" if match_idx % 2 == 0
+                     else "extracting features")
+            label = (f"{phase} — clips {clips_n}/{total_points}, "
+                     f"features {feat_n}/{total_points} "
+                     f"(match {match_idx // 2 + 1}/{len(selected)})")
+            return prep_frac, label
+
+        self._run_screen(
+            title="Training the point model…",
+            subtitle=subtitle + f"\n\nSelected {len(selected)} match"
+                                 f"{'es' if len(selected) != 1 else ''} "
+                                 f"({total_points} points).",
+            argvs=argvs,
+            on_success=self.show_home,
+            step_text="Training point model",
+            progress_fn=progress_fn,
+        )
+
+    def _reset_point_model_training(self) -> None:
+        run_dir = REPO / "files" / "models" / "point_model" / "current"
+        if not run_dir.exists():
+            messagebox.showinfo("Nothing to reset",
+                                "No active training run yet.")
+            return
+        if not messagebox.askyesno(
+                "Reset training?",
+                f"This deletes:\n{run_dir}\n\n"
+                "The next training run will start from epoch 0. "
+                "Cut clips and extracted features are kept. Continue?"):
+            return
+        shutil.rmtree(run_dir, ignore_errors=True)
+        messagebox.showinfo("Reset", "Training checkpoint cleared.")
+
+    # ---- Manage training set ----
+
+    def show_manage_training(self) -> None:
+        self._clear_body()
+        self._show_back(step_text="Training set")
+
+        wrap = tk.Frame(self.body, bg=BG)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text="Training set",
+                 font=FONT_QUESTION, fg=TEXT, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(20, 6))
+
+        if not TRAINING_PAIRS_DIR.is_dir():
+            tk.Label(wrap,
+                     text="No matches imported yet. Add one from the home screen.",
+                     font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w"
+                     ).pack(fill="x", pady=(0, 20))
+            return
+
+        matches = sorted((d for d in TRAINING_PAIRS_DIR.iterdir() if d.is_dir()),
+                         key=lambda d: d.name)
+        tk.Label(wrap,
+                 text=f"{len(matches)} match{'es' if len(matches) != 1 else ''} "
+                      f"under {TRAINING_PAIRS_DIR}",
+                 font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(0, 16))
+
+        clips_root = REPO / "files" / "data" / "clips"
+        features_root = REPO / "files" / "data" / "features"
+
+        box = tk.Frame(wrap, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+        box.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(box, bg=PANEL, bd=0, highlightthickness=0)
+        sb = tk.Scrollbar(box, orient="vertical", command=canvas.yview,
+                          bg=PANEL, troughcolor=BG, bd=0, activebackground=PANEL_HI)
+        inner = tk.Frame(canvas, bg=PANEL)
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        if not matches:
+            tk.Label(inner, text="(empty)", font=FONT_SUB, fg=TEXT_DIM, bg=PANEL,
+                     padx=16, pady=16).pack(anchor="w")
+            return
+
+        for m in matches:
+            vids = list(m.glob("*.mp4"))
+            csvs = list(m.glob("*.csv"))
+            clips_count = sum(1 for _ in (clips_root / m.name).glob("p_*.mp4")) \
+                if (clips_root / m.name).is_dir() else 0
+            feats_count = sum(1 for _ in (features_root / m.name).glob("*.npz")) \
+                if (features_root / m.name).is_dir() else 0
+            sidecar = (m / (vids[0].name + ".setup.json")) if vids else None
+            has_setup = bool(sidecar and sidecar.exists())
+
+            row = tk.Frame(inner, bg=PANEL)
+            row.pack(fill="x", padx=12, pady=6)
+
+            col = tk.Frame(row, bg=PANEL)
+            col.pack(side="left", fill="x", expand=True)
+            tk.Label(col, text=m.name, font=FONT_OPTION, fg=TEXT, bg=PANEL,
+                     anchor="w").pack(fill="x")
+            setup_label = "setup ✓" if has_setup else "setup ✗"
+            detail = (f"{vids[0].name if vids else '(no video)'} • "
+                      f"{csvs[0].name if csvs else '(no csv)'} • "
+                      f"clips: {clips_count} • features: {feats_count} • "
+                      f"{setup_label}")
+            tk.Label(col, text=detail, font=FONT_SUB, fg=TEXT_DIM, bg=PANEL,
+                     anchor="w").pack(fill="x")
+
+            ttk.Button(row, text="Remove", style="Ghost.TButton",
+                       command=lambda md=m: self._remove_training_match(md)
+                       ).pack(side="right", padx=(12, 0))
+            if vids:
+                setup_text = "Redo setup" if has_setup else "Run setup"
+                ttk.Button(row, text=setup_text, style="Ghost.TButton",
+                           command=lambda md=m, vp=vids[0]: self._run_setup_for_pair(md, vp)
+                           ).pack(side="right", padx=(12, 0))
+
+    def _run_setup_for_pair(self, match_dir: Path, video_in_pair: Path) -> None:
+        if not PREFLIGHT_SCRIPT.exists():
+            messagebox.showerror("Missing file", "preflight.py is missing.")
+            return
+        try:
+            subprocess.Popen([sys.executable, str(PREFLIGHT_SCRIPT),
+                              str(video_in_pair)], cwd=str(REPO))
+        except Exception as exc:
+            messagebox.showerror("Couldn't open setup", str(exc))
+            return
+        messagebox.showinfo(
+            "Setup launched",
+            "The preflight window has opened. After you click the court corners and "
+            "save, the sidecar will be written next to the video in the training pair. "
+            "Reopen 'Manage training set' to see the ✓ update.",
+        )
+
+    def _remove_training_match(self, match_dir: Path) -> None:
+        if not messagebox.askyesno(
+                "Remove match?",
+                f"Delete:\n\n{match_dir}\n\n"
+                "Also removes any cut clips and extracted features for this match. "
+                "Does not touch the trained model. Continue?"):
+            return
+        clips_dir = REPO / "files" / "data" / "clips" / match_dir.name
+        features_dir = REPO / "files" / "data" / "features" / match_dir.name
+        for d in (match_dir, clips_dir, features_dir):
+            shutil.rmtree(d, ignore_errors=True)
+        self.show_manage_training()
+
+    # ---- Advanced: YOLO ball-finder pipeline (labels → train) ----
+
+    def show_adv_labels_then_train(self) -> None:
         if not self._require(DARTFISH_SCRIPT, "dartfish_to_yolo.py is missing"):
+            return
+        if not self._require(TRAIN_SCRIPT, "train_yolo_ball.py is missing"):
             return
         if not TRAINING_PAIRS_DIR.is_dir():
             messagebox.showerror("No training folder",
@@ -638,67 +1131,35 @@ class App:
             title="Where should the training labels be saved?")
         if not output_dir:
             return
+        yaml_path = Path(output_dir) / "dataset.yaml"
         self._run_screen(
-            title="Building training labels from your Dartfish tags…",
-            subtitle="Reading every Dartfish CSV and projecting the human-marked "
-                     "bounces into the video frames. Runs for a while — leave it "
-                     "overnight and the ball finder will learn from your own tags.",
-            argv=[sys.executable, str(DARTFISH_SCRIPT),
-                  "--pairs-dir", str(TRAINING_PAIRS_DIR),
-                  "--output-dir", output_dir],
+            title="Building labels, then training the ball finder…",
+            subtitle="Stage 1 projects every human-marked bounce into video frames. "
+                     "Stage 2 trains YOLO on those frames. Runs end-to-end — leave "
+                     "it overnight.",
+            argvs=[
+                [sys.executable, str(DARTFISH_SCRIPT),
+                 "--pairs-dir", str(TRAINING_PAIRS_DIR),
+                 "--output-dir", output_dir],
+                [sys.executable, str(TRAIN_SCRIPT), "--dataset", str(yaml_path)],
+            ],
             on_success=self.show_home,
-            step_text="Building labels",
-        )
-
-    # ---- Advanced ----
-
-    def show_adv_labels(self) -> None:
-        if not self._require(PSEUDO_SCRIPT, "generate_pseudo_labels.py is missing"):
-            return
-        if not self._require(TRACKNET_WEIGHTS, f"Missing weights: {TRACKNET_WEIGHTS.name}"):
-            return
-        input_dir = filedialog.askdirectory(title="Folder with your tagged videos")
-        if not input_dir:
-            return
-        output_dir = filedialog.askdirectory(title="Where should the training labels go?")
-        if not output_dir:
-            return
-        self._run_screen(
-            title="Building training labels…",
-            subtitle="This runs TrackNet across your footage. It can take hours. "
-                     "Leave the window open and come back later.",
-            argv=[sys.executable, str(PSEUDO_SCRIPT),
-                  "--input-dir", input_dir, "--output-dir", output_dir,
-                  "--tracknet-weights", str(TRACKNET_WEIGHTS)],
-            on_success=self.show_home,
-            step_text="Advanced — Making labels",
-        )
-
-    def show_adv_train(self) -> None:
-        if not self._require(TRAIN_SCRIPT, "train_yolo_ball.py is missing"):
-            return
-        dataset_dir = filedialog.askdirectory(title="Training labels folder (where dataset.yaml lives)")
-        if not dataset_dir:
-            return
-        yaml_path = Path(dataset_dir) / "dataset.yaml"
-        if not yaml_path.is_file():
-            messagebox.showerror("Not ready",
-                                 f"No dataset.yaml found inside:\n{dataset_dir}")
-            return
-        self._run_screen(
-            title="Training the ball finder…",
-            subtitle="Overnight job. The window will keep updating as it learns.",
-            argv=[sys.executable, str(TRAIN_SCRIPT), "--dataset", str(yaml_path)],
-            on_success=self.show_home,
-            step_text="Advanced — Training",
+            step_text="Advanced — Labels + training",
         )
 
     # ------------------------------------------------------------------
     # Generic "running" screen
     # ------------------------------------------------------------------
 
-    def _run_screen(self, *, title: str, subtitle: str, argv: list[str],
-                    on_success, step_text: str = "") -> None:
+    def _run_screen(self, *, title: str, subtitle: str,
+                    argv: list[str] | None = None,
+                    argvs: list[list[str]] | None = None,
+                    on_success, step_text: str = "",
+                    progress_fn=None) -> None:
+        chain = argvs if argvs is not None else ([argv] if argv is not None else [])
+        if not chain:
+            raise ValueError("_run_screen requires argv or argvs")
+
         self._clear_body()
         self._show_back(step_text=step_text)
 
@@ -711,10 +1172,25 @@ class App:
                  anchor="w", wraplength=900, justify="left"
                  ).pack(fill="x", pady=(0, 16))
 
-        self.progress = ttk.Progressbar(wrap, mode="indeterminate",
+        top = tk.Frame(wrap, bg=BG)
+        top.pack(fill="x", pady=(0, 4))
+        self.control_btn = ttk.Button(top, text="▶  Play", style="Accent.TButton",
+                                      command=self._toggle_chain)
+        self.control_btn.pack(side="right")
+
+        mode = "determinate" if progress_fn is not None else "indeterminate"
+        self.progress = ttk.Progressbar(top, mode=mode, maximum=100,
                                         style="Horizontal.TProgressbar")
-        self.progress.pack(fill="x", pady=(0, 12))
-        self.progress.start(12)
+        self.progress.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._progress_mode = mode
+        if mode == "determinate":
+            self.progress_label = tk.Label(wrap, text="Ready — press Play to start.",
+                                           font=FONT_SUB, fg=TEXT_DIM, bg=BG,
+                                           anchor="w")
+            self.progress_label.pack(fill="x", pady=(0, 8))
+        else:
+            self.progress_label = None
+        self._progress_fn = progress_fn
 
         # Log panel
         box = tk.Frame(wrap, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
@@ -730,7 +1206,92 @@ class App:
         sb.config(command=self.log.yview)
 
         self._on_success = on_success
+        self._chain_template = list(chain)
+        self._chain = []
+        self._chain_idx = 0
+        self._write_log("[ready — press Play to start]\n\n")
 
+    def _tick_progress(self) -> None:
+        if getattr(self, "proc", None) is None and \
+                self._chain_idx >= len(getattr(self, "_chain", [])):
+            return
+        try:
+            frac, label = self._progress_fn(self._chain_idx,
+                                            len(self._chain),
+                                            self._log_text())
+        except Exception as e:  # noqa: BLE001
+            frac, label = None, f"(progress error: {e})"
+        if frac is not None and self.progress_label is not None:
+            pct = max(0.0, min(1.0, frac)) * 100.0
+            try:
+                self.progress.configure(value=pct)
+                self.progress_label.configure(text=f"{pct:5.1f}%  —  {label}")
+            except tk.TclError:
+                return
+        self.root.after(1000, self._tick_progress)
+
+    def _log_text(self) -> str:
+        try:
+            return self.log.get("1.0", END)
+        except (tk.TclError, AttributeError):
+            return ""
+
+    def _toggle_chain(self) -> None:
+        proc = getattr(self, "proc", None)
+        if proc is not None and proc.poll() is None:
+            self._stop_chain()
+        else:
+            self._play_chain()
+
+    def _play_chain(self) -> None:
+        template = getattr(self, "_chain_template", [])
+        if not template:
+            return
+        self._chain = list(template)
+        self._chain_idx = 0
+        try:
+            self.control_btn.configure(text="■  Stop")
+        except tk.TclError:
+            return
+        if self._progress_mode == "indeterminate":
+            try: self.progress.start(12)
+            except tk.TclError: pass
+        self._start_next_in_chain()
+        if self._progress_fn is not None:
+            self._tick_progress()
+
+    def _stop_chain(self) -> None:
+        self._chain = []
+        self._chain_idx = 0
+        proc = getattr(self, "proc", None)
+        try:
+            self.control_btn.configure(text="▶  Play")
+        except tk.TclError:
+            pass
+        if proc is None or proc.poll() is not None:
+            self._write_log("\n[stop requested — nothing running]\n")
+            return
+        self._write_log("\n[stopping…]\n")
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                proc.terminate()
+        except Exception as exc:  # noqa: BLE001
+            self._write_log(f"[stop failed: {exc}]\n")
+
+    def _start_next_in_chain(self) -> None:
+        if self._chain_idx >= len(self._chain):
+            self._on_proc_done(0)
+            return
+        argv = self._chain[self._chain_idx]
+        stage = f"[stage {self._chain_idx + 1}/{len(self._chain)}] " \
+                f"{' '.join(str(a) for a in argv)}\n"
+        self._write_log(stage)
         try:
             self.proc = subprocess.Popen(
                 argv, cwd=str(REPO),
@@ -739,9 +1300,10 @@ class App:
             )
         except Exception as exc:  # noqa: BLE001
             self._write_log(f"ERROR: failed to start: {exc}\n")
-            self.progress.stop()
+            if hasattr(self, "progress"):
+                try: self.progress.stop()
+                except tk.TclError: pass
             return
-
         threading.Thread(target=self._reader_thread, args=(self.proc,),
                          daemon=True).start()
 
@@ -766,12 +1328,23 @@ class App:
         self.root.after(100, self._pump_log)
 
     def _on_proc_done(self, rc: int) -> None:
+        self.proc = None
+        chain = getattr(self, "_chain", [])
+        if rc == 0 and getattr(self, "_chain_idx", 0) < len(chain) - 1:
+            self._chain_idx += 1
+            self._write_log(f"\n[stage {self._chain_idx}/{len(chain)} finished ok]\n\n")
+            self._start_next_in_chain()
+            return
+
         if hasattr(self, "progress"):
             try:
                 self.progress.stop()
             except tk.TclError:
                 pass
-        self.proc = None
+        try:
+            self.control_btn.configure(text="▶  Play")
+        except (tk.TclError, AttributeError):
+            pass
         if rc == 0:
             self._write_log("\n[finished successfully]\n")
             cb = getattr(self, "_on_success", None)
@@ -781,6 +1354,17 @@ class App:
             self._write_log(f"\n[stopped with exit code {rc}]\n")
 
     def _write_log(self, text: str) -> None:
+        # Always persist to disk first so crashes/fast window-close don't eat
+        # the output. The file is created on the first write of each run.
+        try:
+            if getattr(self, "_log_path", None) is None:
+                log_dir = REPO / "files" / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                self._log_path = log_dir / f"run-{_timestamp()}.log"
+            with open(self._log_path, "a", encoding="utf-8", errors="replace") as f:
+                f.write(text)
+        except Exception:
+            pass
         if not hasattr(self, "log"):
             return
         try:
