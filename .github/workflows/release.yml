@@ -165,6 +165,18 @@ jobs:
         with:
           draft: true
           generate_release_notes: true
+          body: |
+            ## Install (Windows 10 / 11)
+
+            1. Download **`TennisTagger-Setup-${{ github.ref_name }}.exe`** from the **Assets** below.
+            2. Run it. Windows will show a blue **"Windows protected your PC"** dialog — the installer isn't code-signed. Click **More info → Run anyway**. The file is safe.
+            3. Click through the wizard (defaults are fine). When it finishes, the app launches automatically.
+
+            No Python or extra setup needed — everything (Python runtime, PyTorch, ffmpeg, models) is bundled inside the installer.
+
+            About **1 GB** free disk space required. CPU-only build; a GPU variant can be requested via the Actions tab if needed.
+
+            ### What's new
           files: |
             dist/TennisTagger-Setup-*.exe
             dist/TennisTagger-Setup-*.exe.sha256

@@ -2,9 +2,24 @@
 
 Automated tennis match analysis. Match video in → Dartfish-compatible point-by-point CSV out.
 
-The whole workflow is driven from a single Tkinter launcher — no CLI required end-to-end. Per-match calibration (court corners, player/ball colors, ball anchors) takes a couple of minutes; everything after that runs as a chain of skippable, resumable stages.
+The whole workflow is driven from a single launcher — no CLI required end-to-end. Per-match calibration (court corners, player/ball colors, ball anchors) takes a couple of minutes; everything after that runs as a chain of skippable, resumable stages.
 
-## Quick start
+## Install (Windows)
+
+**[➡ Download the latest installer](https://github.com/liamparker17/tennis-tagger-monkey/releases/latest)**
+
+1. On the page above, click `TennisTagger-Setup-<version>.exe` to download.
+2. Run the file. Windows will show a blue **"Windows protected your PC"** screen because the installer isn't code-signed (this is expected for hobby releases — the file is safe). Click **More info → Run anyway**.
+3. Follow the wizard. You can pick where to install; defaults are fine.
+4. When the installer finishes, leave **"Launch Tennis Tagger"** ticked and click **Finish**. The app opens.
+
+That's it — no Python, no `pip install`, no PATH setup. Everything is bundled.
+
+**Requirements:** Windows 10 or 11, x64. About 1 GB free disk space. NVIDIA GPU optional (the default installer ships CPU-only PyTorch; a GPU build is available from the Releases page if you need it).
+
+**Sharing trained models with a friend:** the launcher has a **"Share with a friend (USB)"** option in the home screen's Advanced row. Plug a USB stick in, click **Send my model**, hand over the drive. Your friend plugs it in, clicks **Use my friend's model**, and picks **Merge** to average their model with yours, or **Replace** to adopt yours wholesale. Their previous model is auto-backed-up either way.
+
+## Quick start (from source)
 
 ```bash
 pythonw tagger_ui.py
