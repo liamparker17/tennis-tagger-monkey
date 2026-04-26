@@ -6,12 +6,107 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/liamp/tennis-tagger/internal/app"
 	"github.com/liamp/tennis-tagger/internal/bridge"
 	"github.com/liamp/tennis-tagger/internal/config"
+	"github.com/liamp/tennis-tagger/internal/modelshare"
 	"github.com/liamp/tennis-tagger/internal/pointmodel"
 )
+
+
+// runModelSubcommand handles `tagger model {export|import|merge}` for the
+// point model. Designed for two collaborators swapping weights via USB.
+//
+//   export <out-dir>     write the local point model + manifest into a folder
+//   import <bundle-dir>  replace the local point model with the bundle's
+//   merge  <bundle-dir>  average the bundle's weights into the local model
+//
+// All three operate on files/models/point_model/current/best.pt.
+func runModelSubcommand(args []string) {
+	const localPt = "files/models/point_model/current/best.pt"
+
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: tagger model <export|import|merge> <path>")
+		os.Exit(2)
+	}
+	verb := args[0]
+
+	switch verb {
+	case "export":
+		fs := flag.NewFlagSet("model export", flag.ExitOnError)
+		author := fs.String("author", "", "Your name (shown in the manifest)")
+		notes := fs.String("notes", "", "Optional free-text note")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() != 1 {
+			fmt.Fprintln(os.Stderr, "usage: tagger model export [--author NAME] [--notes TEXT] <out-dir>")
+			os.Exit(2)
+		}
+		m, err := modelshare.ExportModel(localPt, fs.Arg(0), *author, "point_model", *notes)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "export failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Exported %s (%.1f MB) to %s\n", m.ModelKind, float64(m.SizeBytes)/(1024*1024), fs.Arg(0))
+
+	case "import":
+		fs := flag.NewFlagSet("model import", flag.ExitOnError)
+		_ = fs.Parse(args[1:])
+		if fs.NArg() != 1 {
+			fmt.Fprintln(os.Stderr, "usage: tagger model import <bundle-dir>")
+			os.Exit(2)
+		}
+		bundleDir := fs.Arg(0)
+		m, err := modelshare.LoadManifest(bundleDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		if err := modelshare.VerifyChecksum(bundleDir, m); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		if err := modelshare.CopyWeightsTo(bundleDir, m, localPt); err != nil {
+			fmt.Fprintf(os.Stderr, "copy: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Imported %s's model (%s) to %s\n", m.Author, m.CreatedAt, localPt)
+
+	case "merge":
+		fs := flag.NewFlagSet("model merge", flag.ExitOnError)
+		python := fs.String("python", "python", "Python interpreter")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() != 1 {
+			fmt.Fprintln(os.Stderr, "usage: tagger model merge <bundle-dir>")
+			os.Exit(2)
+		}
+		bundleDir := fs.Arg(0)
+		m, err := modelshare.LoadManifest(bundleDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		if err := modelshare.VerifyChecksum(bundleDir, m); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		cmd := exec.Command(*python, filepath.Join("ml", "merge_models.py"),
+			"--out", localPt, localPt, filepath.Join(bundleDir, m.WeightsFilename))
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "merge failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Merged %s's model (%s) into %s\n", m.Author, m.CreatedAt, localPt)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown verb %q (expected export, import, or merge)\n", verb)
+		os.Exit(2)
+	}
+}
 
 // loadMatchSetup reads <video>.setup.json (produced by preflight.py) if
 // present and converts it to a bridge.MatchSetup. Returns (nil, nil) when
@@ -61,6 +156,12 @@ func loadMatchSetup(videoPath string) (*bridge.MatchSetup, error) {
 }
 
 func main() {
+	// Subcommand dispatch (kept simple to avoid restructuring the existing flag set).
+	if len(os.Args) >= 2 && os.Args[1] == "model" {
+		runModelSubcommand(os.Args[2:])
+		return
+	}
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	useMock := flag.Bool("mock", false, "Use MockBridge (no Python needed)")

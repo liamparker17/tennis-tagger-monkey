@@ -1,0 +1,170 @@
+name: Build Windows Installer
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      gpu:
+        description: "Build CUDA (GPU) variant instead of CPU"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # needed to create the GitHub Release and upload assets
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true   # in case .pt files get migrated to LFS later
+
+      - name: Fetch model weights
+        shell: pwsh
+        env:
+          MODELS_URL: ${{ secrets.MODELS_BUNDLE_URL }}
+        run: |
+          $models = Get-ChildItem models -Filter *.pt -ErrorAction SilentlyContinue
+          if ($models) {
+            Write-Host "Found $($models.Count) model file(s) in repo (LFS or committed)."
+            return
+          }
+          if (-not $env:MODELS_URL) {
+            throw @"
+          No .pt files in models/ and no MODELS_BUNDLE_URL secret set.
+          Options:
+            1) Migrate models to git-lfs (recommended for repo).
+            2) Set the MODELS_BUNDLE_URL repo secret to a zip URL containing models/*.pt
+               (e.g. a private GitHub Release asset, S3 object, etc.).
+          "@
+          }
+          Write-Host "Downloading models bundle from MODELS_BUNDLE_URL"
+          $zip = "$env:RUNNER_TEMP\models.zip"
+          Invoke-WebRequest -Uri $env:MODELS_URL -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath . -Force
+          Get-ChildItem models -Filter *.pt | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
+      # The bundle script downloads its own embedded Python; this Python is
+      # only used as a convenience for any host-side scripting we add later.
+      - name: Set up Python (host)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/.cache
+            ~/AppData/Local/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-bundle-${{ hashFiles('go.sum', 'ml/requirements.txt', 'packaging/build_bundle.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-bundle-
+
+      - name: Build bundle
+        shell: pwsh
+        env:
+          BUILD_GPU: ${{ inputs.gpu == true }}
+        run: |
+          $args = @()
+          if ($env:BUILD_GPU -eq 'True' -or $env:BUILD_GPU -eq 'true') { $args += '-Gpu' }
+          .\packaging\build_bundle.ps1 @args
+
+      - name: Smoke test bundle (mock pipeline)
+        shell: pwsh
+        run: |
+          $bundle = "dist\TennisTagger"
+          $tagger = Join-Path $bundle "tagger.exe"
+          $video  = "testdata\sample_5s.mp4"
+          if (-not (Test-Path $tagger)) { throw "tagger.exe missing from bundle" }
+          if (-not (Test-Path $video))  { throw "smoke-test video $video missing from repo" }
+
+          # Stage video inside bundle so the binary's relative-path assumptions hold.
+          $work = Join-Path $env:RUNNER_TEMP "smoke"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          Copy-Item -Recurse -Force $bundle "$work\TennisTagger"
+          Copy-Item $video "$work\TennisTagger\sample_5s.mp4"
+
+          Push-Location "$work\TennisTagger"
+          try {
+            $env:PATH = "$PWD\ffmpeg;$env:PATH"
+            Write-Host "==> Running: tagger.exe --mock sample_5s.mp4"
+            & .\tagger.exe --mock sample_5s.mp4 2>&1 | Tee-Object -FilePath smoke.log
+            if ($LASTEXITCODE -ne 0) {
+              Get-Content smoke.log | Select-Object -Last 50
+              throw "tagger.exe exited with code $LASTEXITCODE"
+            }
+            $csv = Get-ChildItem -Filter "sample_5s*output*.csv" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $csv) { throw "No output CSV produced — pipeline ran but emitted nothing" }
+            Write-Host "==> CSV: $($csv.Name) ($($csv.Length) bytes)"
+            if ($csv.Length -lt 100) { throw "CSV suspiciously small: $($csv.Length) bytes" }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Smoke test bundled Python (import check)
+        shell: pwsh
+        run: |
+          $py = "dist\TennisTagger\python\python.exe"
+          if (-not (Test-Path $py)) { throw "embedded python.exe missing" }
+          & $py -c "import torch, cv2, numpy, scipy, ultralytics; print('torch', torch.__version__); print('cv2', cv2.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "embedded python failed import check" }
+
+      - name: Verify Inno Setup
+        shell: pwsh
+        run: |
+          # Pre-installed on windows-latest runners
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found on runner" }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          & "$env:ISCC" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-ChildItem dist\TennisTagger-Setup-*.exe | ForEach-Object {
+            "INSTALLER=$($_.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "INSTALLER_NAME=$($_.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Compute checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash $env:INSTALLER -Algorithm SHA256).Hash.ToLower()
+          "$hash  $env:INSTALLER_NAME" | Out-File "$env:INSTALLER.sha256" -Encoding ascii
+          Write-Host "SHA256: $hash"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TennisTagger-installer
+          path: |
+            dist/TennisTagger-Setup-*.exe
+            dist/TennisTagger-Setup-*.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            dist/TennisTagger-Setup-*.exe
+            dist/TennisTagger-Setup-*.exe.sha256

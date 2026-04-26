@@ -207,6 +207,31 @@ go build -o tagger.exe ./cmd/tagger
 
 Writes `<video>_output.csv` — Dartfish-compatible tagging.
 
+## Sharing trained models with a collaborator
+
+Two collaborators training the point model on different footage can pool
+their results weekly via USB swap. The launcher's "Share with a friend (USB)"
+screen walks you through it. CLI equivalents:
+
+```bash
+# Send: write your trained model + a manifest into an empty folder
+./tagger.exe model export --author alice /e/usb/week17
+
+# Receive (option A): replace your model with theirs
+./tagger.exe model import /e/usb/friend-week17
+
+# Receive (option B): average theirs into yours — recommended weekly flow
+./tagger.exe model merge /e/usb/friend-week17
+```
+
+A bundle folder contains `manifest.json` (author, date, SHA256, optional
+notes) and `weights.pt`. Both partners must train from the same base
+architecture; otherwise the merge errors out with a layer mismatch.
+
+The launcher always backs up your current `best.pt` before replacing or
+merging — look for `best.before-merge-<timestamp>.pt` next to the active
+checkpoint if you need to roll back.
+
 ## Tests
 
 ```bash

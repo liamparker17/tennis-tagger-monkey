@@ -18,7 +18,7 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import END, filedialog, messagebox, ttk
+from tkinter import END, filedialog, messagebox, simpledialog, ttk
 
 
 # Prefer console-attached python.exe over pythonw.exe for child processes so
@@ -373,6 +373,8 @@ class App:
                    command=self.show_adv_labels_then_train).pack(side="left", padx=(8, 0))
         ttk.Button(adv, text="Manage training set", style="Ghost.TButton",
                    command=self.show_manage_training).pack(side="left", padx=(4, 0))
+        ttk.Button(adv, text="Share with a friend (USB)", style="Ghost.TButton",
+                   command=self.show_share_hub).pack(side="left", padx=(4, 0))
 
     # ---- Path A: Tag a new match ----
 
@@ -1114,6 +1116,230 @@ class App:
         for d in (match_dir, clips_dir, features_dir):
             shutil.rmtree(d, ignore_errors=True)
         self.show_manage_training()
+
+    # ---- Advanced: Share with a friend (USB) ----
+    #
+    # Walkthrough: Hub -> Send (pick folder -> done) | Receive (pick folder -> review -> action -> done)
+
+    def show_share_hub(self) -> None:
+        self._clear_body()
+        self._show_back(step_text="Share with a friend")
+
+        wrap = tk.Frame(self.body, bg=BG)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text="Share with a friend",
+                 font=FONT_QUESTION, fg=TEXT, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(20, 6))
+        tk.Label(wrap,
+                 text="Plug a USB stick or external drive into your machine. "
+                      "Tennis Tagger uses it to swap trained models with a friend.",
+                 font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w", justify="left", wraplength=720
+                 ).pack(fill="x", pady=(0, 16))
+
+        local_pt = REPO / "files" / "models" / "point_model" / "current" / "best.pt"
+        has_pt = local_pt.exists()
+
+        OptionButton(
+            wrap,
+            title="Send my model to my friend",
+            subtitle=("Save your trained model to a folder on the USB drive. "
+                      "Eject the drive and hand it over." if has_pt else
+                      "You haven't trained a model yet — train one first to share it."),
+            command=self._share_send_step1 if has_pt else (lambda: messagebox.showinfo(
+                "Nothing to share yet",
+                "Train a point model first. The home screen has a 'Train the point model' option once you've added matches.")),
+            primary=has_pt,
+        ).pack(fill="x", pady=8)
+
+        OptionButton(
+            wrap,
+            title="Use my friend's model",
+            subtitle="Plug in the drive your friend gave you. Pick the folder they sent. "
+                     "Tennis Tagger walks you through what to do with it.",
+            command=self._share_recv_step1,
+        ).pack(fill="x", pady=8)
+
+    # ---- Send walkthrough ----
+
+    def _share_send_step1(self) -> None:
+        """Step 1 of 2: pick destination folder."""
+        out_dir = filedialog.askdirectory(
+            title="Pick an empty folder on your USB drive",
+            mustexist=False,
+        )
+        if not out_dir:
+            return
+        out_path = Path(out_dir)
+        if out_path.exists() and any(out_path.iterdir()):
+            messagebox.showerror(
+                "Folder not empty",
+                f"{out_path} already has files in it.\n\n"
+                "Pick a brand-new folder (or make one) so we don't overwrite anything.",
+            )
+            return
+        self._share_send_step2(out_path)
+
+    def _share_send_step2(self, out_path: Path) -> None:
+        """Step 2 of 2: ask for name, run export, show success."""
+        author = simpledialog.askstring(
+            "Your name",
+            "Your name (so your friend knows whose model this is):",
+            parent=self.root,
+        )
+        if author is None:
+            return
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        cmd = [str(TAGGER_EXE), "model", "export",
+               "--author", (author or "anonymous"),
+               str(out_path)]
+        try:
+            r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=60)
+        except Exception as e:
+            messagebox.showerror("Send failed", str(e))
+            return
+        if r.returncode != 0:
+            messagebox.showerror("Send failed", (r.stderr or r.stdout or "Unknown error").strip())
+            return
+        messagebox.showinfo(
+            "Model saved to USB",
+            f"Done!\n\n{r.stdout.strip()}\n\n"
+            f"Eject the drive and give it to your friend. Tell them to pick this folder:\n"
+            f"{out_path}",
+        )
+        self.show_home()
+
+    # ---- Receive walkthrough ----
+
+    def _share_recv_step1(self) -> None:
+        """Step 1 of 3: pick the bundle folder."""
+        if not self._require(TAGGER_EXE, "tagger.exe is missing"):
+            return
+        in_dir = filedialog.askdirectory(
+            title="Pick the folder on your friend's USB drive",
+        )
+        if not in_dir:
+            return
+        bundle = Path(in_dir)
+        manifest_path = bundle / "manifest.json"
+        if not manifest_path.exists():
+            messagebox.showerror(
+                "That doesn't look like a model bundle",
+                f"{manifest_path} was not found.\n\n"
+                "Pick the folder that has manifest.json and weights.pt inside it.",
+            )
+            return
+
+        try:
+            import json
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            messagebox.showerror("Couldn't read the bundle", str(e))
+            return
+
+        self._share_recv_step2(bundle, manifest)
+
+    def _share_recv_step2(self, bundle: Path, manifest: dict) -> None:
+        """Step 2 of 3: show what we found, pick action."""
+        self._clear_body()
+        self._show_back(step_text="Use my friend's model — Step 2 of 3")
+
+        wrap = tk.Frame(self.body, bg=BG)
+        wrap.pack(fill="both", expand=True)
+
+        author = manifest.get("author", "unknown")
+        created = manifest.get("created_at", "unknown date")
+        size_mb = manifest.get("size_bytes", 0) / (1024 * 1024)
+        notes = manifest.get("notes", "")
+
+        tk.Label(wrap, text=f"{author}'s trained model",
+                 font=FONT_QUESTION, fg=TEXT, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(20, 6))
+        tk.Label(wrap, text=f"Made on {created}    •    {size_mb:.1f} MB",
+                 font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(0, 6))
+        if notes:
+            tk.Label(wrap, text=f"Note: {notes}",
+                     font=FONT_BODY, fg=TEXT_DIM, bg=BG, anchor="w", wraplength=720, justify="left"
+                     ).pack(fill="x", pady=(0, 12))
+
+        local_pt = REPO / "files" / "models" / "point_model" / "current" / "best.pt"
+        has_local = local_pt.exists()
+
+        tk.Label(wrap, text="What would you like to do with it?",
+                 font=FONT_OPTION, fg=TEXT, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(8, 12))
+
+        OptionButton(
+            wrap,
+            title="Merge with my model",
+            subtitle="Average their weights with yours. This is the recommended weekly flow — "
+                     "you both end up with a model that learned from both sets of footage. "
+                     "Your current model is backed up first.",
+            command=lambda: self._share_recv_step3(bundle, manifest, action="merge"),
+            primary=has_local,
+        ).pack(fill="x", pady=8)
+
+        OptionButton(
+            wrap,
+            title="Replace my model with theirs",
+            subtitle="Use their model directly instead of yours. Good for trying out their model "
+                     "as-is. Your current model is backed up first so you can switch back.",
+            command=lambda: self._share_recv_step3(bundle, manifest, action="replace"),
+        ).pack(fill="x", pady=8)
+
+        if not has_local:
+            tk.Label(wrap, text="(You don't have a trained model yet, so 'Merge' isn't available — "
+                                "Replace will install theirs.)",
+                     font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w", wraplength=720, justify="left"
+                     ).pack(fill="x", pady=(8, 0))
+
+    def _share_recv_step3(self, bundle: Path, manifest: dict, action: str) -> None:
+        """Step 3 of 3: do the thing, show result."""
+        local_pt = REPO / "files" / "models" / "point_model" / "current" / "best.pt"
+
+        # Always back up the current model before changing anything.
+        backup = None
+        if local_pt.exists():
+            backup = local_pt.with_name(f"best.before-{action}-{_timestamp()}.pt")
+            try:
+                shutil.copy2(local_pt, backup)
+            except OSError as e:
+                messagebox.showerror("Backup failed", str(e))
+                return
+
+        if action == "merge" and not local_pt.exists():
+            # Fall through to replace — nothing to merge with.
+            action = "replace"
+
+        if action == "merge":
+            cmd = [str(TAGGER_EXE), "model", "merge", "--python", PYEXE, str(bundle)]
+            verb = "Merged"
+        else:
+            cmd = [str(TAGGER_EXE), "model", "import", str(bundle)]
+            verb = "Replaced"
+
+        try:
+            r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            messagebox.showerror("Timed out", "Operation took too long (>10 min).")
+            return
+        except Exception as e:
+            messagebox.showerror(f"{verb} failed", str(e))
+            return
+        if r.returncode != 0:
+            messagebox.showerror(f"{verb.replace('ed', '')} failed",
+                                 (r.stderr or r.stdout or "Unknown error").strip())
+            return
+
+        backup_msg = f"\n\nYour previous model was backed up to:\n{backup.name}" if backup else ""
+        messagebox.showinfo(
+            f"{verb} successfully",
+            f"{verb} {manifest.get('author','your friend')}'s model into yours."
+            f"{backup_msg}\n\nRe-tag a known match to sanity-check the result.",
+        )
+        self.show_home()
 
     # ---- Advanced: YOLO ball-finder pipeline (labels → train) ----
 
