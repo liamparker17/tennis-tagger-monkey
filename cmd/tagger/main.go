@@ -159,6 +159,28 @@ func runModelSubcommand(args []string) {
 				fmt.Fprintf(os.Stderr, "skip %s: %v\n", b.Path, err)
 				continue
 			}
+			// First-time case: no local checkpoint yet (fresh install on a
+			// new tagger's machine). Merging two checkpoints requires both
+			// to exist, so adopt the remote bundle wholesale as the seed.
+			// Subsequent bundles in this same sync run will then merge
+			// normally because we just wrote localPt.
+			if _, statErr := os.Stat(localPt); os.IsNotExist(statErr) {
+				if err := os.MkdirAll(filepath.Dir(localPt), 0o755); err != nil {
+					fmt.Fprintf(os.Stderr, "create model dir: %v\n", err)
+					os.Exit(1)
+				}
+				if err := modelshare.CopyWeightsTo(b.Path, b.Manifest, localPt); err != nil {
+					fmt.Fprintf(os.Stderr, "first-time import %s failed: %v\n", b.Path, err)
+					os.Exit(1)
+				}
+				state.LastSeen[b.MachineID] = b.Timestamp
+				if err := state.Save(localPt); err != nil {
+					fmt.Fprintf(os.Stderr, "save sync state: %v\n", err)
+				}
+				fmt.Printf("Imported %s @ %s as seed model (no local checkpoint existed)\n",
+					b.MachineID[:8], b.Timestamp)
+				continue
+			}
 			cmd := exec.Command(*python, filepath.Join("ml", "merge_models.py"),
 				"--out", localPt, localPt,
 				filepath.Join(b.Path, b.Manifest.WeightsFilename))
