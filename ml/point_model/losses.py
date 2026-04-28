@@ -16,12 +16,12 @@ def compute_losses(logits, t):
     l_contact = _bce_masked(logits["contact_logits"], t["contact"], contact_mask) \
               + _bce_masked(logits["contact_logits"], t["contact"], weak_mask)
 
-    # Bounce head is intentionally untrained until the Bayesian
-    # contact/bounce inferrer (planned — needs fine-tuned ball detector first)
-    # produces real bounce frame labels. Synthetic midpoint labels would only
-    # teach the head "bounces are halfway between contacts" which is a
-    # useless prior.
-    l_bounce = torch.tensor(0.0, device=mask.device)
+    # Bounce supervision is sparse — typically only the last bounce per point
+    # from ball_anchors. Train only on points where bounce_strong=1; mask out
+    # the rest so we don't teach the head "no bounces ever" on unlabeled points.
+    bs = t["bounce_strong"].view(-1, 1)
+    bounce_mask = mask * bs
+    l_bounce = _bce_masked(logits["bounce_logits"], t["bounce"], bounce_mask)
 
     hit_mask = (t["hitter_per_frame"] >= 0).float() * mask
     hit_targets = t["hitter_per_frame"].clamp_min(0)

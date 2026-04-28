@@ -35,6 +35,8 @@ def _to_targets(batch, device):
     return {
         "contact": torch.from_numpy(np.stack([t.contact_frames for t in Tg])).to(device),
         "contact_strong": torch.tensor([1.0 if t.contact_strong else 0.0 for t in Tg], device=device),
+        "bounce": torch.from_numpy(np.stack([t.bounce_frames for t in Tg])).to(device),
+        "bounce_strong": torch.tensor([1.0 if t.bounce_strong else 0.0 for t in Tg], device=device),
         "hitter_per_frame": torch.from_numpy(np.stack([t.hitter_per_frame for t in Tg])).to(device),
         "stroke": torch.from_numpy(np.stack([t.stroke_idx for t in Tg])).to(device),
         "outcome": torch.tensor([t.outcome_idx for t in Tg], device=device),
@@ -131,16 +133,23 @@ def train(cfg: TrainConfig) -> dict:
         return {"best_val": best, "history": history}
 
     for ep in range(start_epoch, cfg.epochs):
-        model.train(); t0 = time.time(); train_loss = 0.0; n = 0
+        model.train(); t0 = time.time(); train_loss = 0.0; n = 0; n_skipped = 0
         for batch in train_dl:
             x = batch["features"].to(device); m = batch["mask"].to(device)
             tg = _to_targets(batch, device)
             opt.zero_grad()
             out = model(x, m); loss = compute_losses(out, tg)["total"]
+            # Skip the step when loss is non-finite (NaN/Inf). Stepping with a
+            # non-finite gradient corrupts every parameter and silently kills
+            # the run. Earlier 20-epoch runs hit this at epoch 16.
+            if not torch.isfinite(loss):
+                n_skipped += 1; continue
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             opt.step(); train_loss += float(loss); n += 1
         train_loss /= max(n, 1)
+        if n_skipped:
+            _log(f"  WARN: skipped {n_skipped} non-finite batches this epoch")
 
         model.eval(); val_loss = 0.0; vn = 0
         with torch.no_grad():

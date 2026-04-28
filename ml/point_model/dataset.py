@@ -60,10 +60,10 @@ class ClipDataset(Dataset):
         n = min(T, Tm)
         out[:n] = feats[:n]; mask[:n] = 1.0
 
-        strong = p.get("_contact")
-        strong_pairs = [(int(e["frame"]), int(e["hitter"])) for e in strong] if strong else None
+        fps = int(z["fps"])
+        strong_pairs, bounce_frames = _supervision_from_point(p, fps, Tm)
         targets = build_targets(
-            T=Tm, fps=int(z["fps"]),
+            T=Tm, fps=fps,
             stroke_count_lo=int(p.get("stroke_count_lo", 0)),
             stroke_count_hi=int(p.get("stroke_count_hi", 0)),
             stroke_types=list(p.get("stroke_types", [])),
@@ -73,6 +73,58 @@ class ClipDataset(Dataset):
             player_a=p.get("player_a", ""),
             player_b=p.get("player_b", ""),
             strong_contact_frames=strong_pairs,
+            bounce_frames=bounce_frames,
         )
         return {"features": out, "mask": mask, "targets": targets,
                 "meta": {"match": match, "clip": p["clip"]}}
+
+
+def _supervision_from_point(p: dict, fps: int, T_max: int
+                            ) -> tuple[Optional[list[tuple[int, int]]], Optional[list[int]]]:
+    """Build (contact_strong, bounce_frames) supervision for one point.
+
+    Priority for contacts: contact_labels.json (dense, from contact_labeler GUI)
+    if present, else ball_anchors from labels.json (sparse: typically just
+    serve_contact). Bounces always come from ball_anchors *_bounce entries
+    since contact_labels only tracks contacts, not bounces.
+
+    Hitter for serve_contact = the server's pose-axis index (0 = player_a).
+    For other contact types we don't infer hitter here — the alternation
+    prior in build_targets handles the rest.
+    """
+    contacts = p.get("_contact")
+    strong_pairs: Optional[list[tuple[int, int]]]
+    if contacts:
+        strong_pairs = [(int(e["frame"]), int(e["hitter"])) for e in contacts]
+    else:
+        strong_pairs = None
+        anchors = p.get("ball_anchors") or []
+        # Only use anchors for contact supervision when we know the hitter.
+        # serve_contact => server. Other anchors don't tell us who hit.
+        server = (p.get("server") or "").strip().lower()
+        a_name = (p.get("player_a") or "").strip().lower()
+        b_name = (p.get("player_b") or "").strip().lower()
+        server_idx = 0 if (a_name and server == a_name) else (
+            1 if (b_name and server == b_name) else (0 if server == "p1" else None))
+        c_pairs: list[tuple[int, int]] = []
+        for a in anchors:
+            shot = str(a.get("shot", ""))
+            if shot == "serve_contact" and server_idx is not None:
+                f = int(round(float(a.get("t_clip_s", 0.0)) * fps))
+                if 0 <= f < T_max:
+                    c_pairs.append((f, server_idx))
+        if c_pairs:
+            strong_pairs = c_pairs
+
+    bounce_frames: Optional[list[int]] = None
+    anchors = p.get("ball_anchors") or []
+    bf: list[int] = []
+    for a in anchors:
+        shot = str(a.get("shot", ""))
+        if shot.endswith("_bounce"):
+            f = int(round(float(a.get("t_clip_s", 0.0)) * fps))
+            if 0 <= f < T_max:
+                bf.append(f)
+    if bf:
+        bounce_frames = bf
+    return strong_pairs, bounce_frames

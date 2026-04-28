@@ -11,6 +11,8 @@ class Targets:
     contact_frames: np.ndarray
     hitter_per_frame: np.ndarray
     contact_strong: bool
+    bounce_frames: np.ndarray
+    bounce_strong: bool
     stroke_idx: np.ndarray
     hitter_per_shot: np.ndarray
     outcome_idx: int
@@ -58,7 +60,8 @@ def build_targets(*, T: int, fps: int,
                   stroke_types: list[str],
                   outcome: str, point_won_by: str,
                   server: str, player_a: str, player_b: str,
-                  strong_contact_frames: Optional[list[tuple[int, int]]]) -> Targets:
+                  strong_contact_frames: Optional[list[tuple[int, int]]],
+                  bounce_frames: Optional[list[int]] = None) -> Targets:
     contact = np.zeros((T,), np.int64)
     hitter_pf = np.full((T,), -1, np.int64)
     server_is_p1 = _server_is_p1(server, player_a, player_b)
@@ -79,6 +82,14 @@ def build_targets(*, T: int, fps: int,
                 f = max(0, min(T - 1, f))
                 contact[f] = 1; hitter_pf[f] = seq[i]
 
+    bounce = np.zeros((T,), np.int64)
+    bounce_is_strong = False
+    if bounce_frames:
+        bounce_is_strong = True
+        for f in bounce_frames:
+            if 0 <= f < T:
+                bounce[f] = 1
+
     stroke_idx = np.full((MAX_SHOTS,), STROKE_PAD_INDEX, np.int64)
     hitter_ps = np.full((MAX_SHOTS,), -1, np.int64)
     for i, s in enumerate(stroke_types[:MAX_SHOTS]):
@@ -87,7 +98,9 @@ def build_targets(*, T: int, fps: int,
 
     return Targets(
         contact_frames=contact, hitter_per_frame=hitter_pf,
-        contact_strong=strong, stroke_idx=stroke_idx,
+        contact_strong=strong,
+        bounce_frames=bounce, bounce_strong=bounce_is_strong,
+        stroke_idx=stroke_idx,
         hitter_per_shot=hitter_ps, outcome_idx=outcome_index(outcome),
         server_is_p1=server_is_p1,
     )
