@@ -149,8 +149,24 @@ if ($dsn) {
 }
 
 # ---------- 7. Sanity check ----------
+# Smoke-test the bundled binary. We don't redirect stderr (`2>&1`) and we
+# wrap the call so the non-zero exit from `--help` (Go's flag package
+# returns 2) doesn't trip $ErrorActionPreference=Stop on the host.
 Write-Host "==> Smoke test: tagger.exe --help" -ForegroundColor Cyan
-& (Join-Path $Dist "tagger.exe") --help 2>&1 | Select-Object -First 5
+$taggerExe = Join-Path $Dist "tagger.exe"
+if (-not (Test-Path $taggerExe)) { throw "tagger.exe missing from bundle: $taggerExe" }
+$prevPref = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    & $taggerExe --help | Select-Object -First 5
+    # Exit code 0 or 2 (--help convention) is fine; anything else is a real error.
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 2) {
+        throw "tagger.exe smoke test returned unexpected exit code $LASTEXITCODE"
+    }
+    $global:LASTEXITCODE = 0
+} finally {
+    $ErrorActionPreference = $prevPref
+}
 
 $size = (Get-ChildItem $Dist -Recurse | Measure-Object Length -Sum).Sum / 1MB
 Write-Host ("==> Bundle ready: {0:N0} MB at {1}" -f $size, $Dist) -ForegroundColor Green
