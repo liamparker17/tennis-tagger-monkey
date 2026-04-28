@@ -4,6 +4,12 @@
 #   .\packaging\build_bundle.ps1                    # CPU-only torch (smaller, ~600MB)
 #   .\packaging\build_bundle.ps1 -Gpu               # CUDA 12.1 torch (~2.5GB)
 #   .\packaging\build_bundle.ps1 -SkipPyDeps        # reuse existing python/ dir
+#   .\packaging\build_bundle.ps1 -SentryDsn 'https://abc@o123.ingest.sentry.io/456'
+#
+# The Sentry DSN can also come from the TENNIS_TAGGER_SENTRY_DSN env var
+# (handy for CI). When set, a sentry.dsn file is dropped into the bundle so
+# the installed app reports crashes back to Sentry without each end user
+# having to set anything.
 #
 # Run from project root.
 
@@ -12,7 +18,8 @@ param(
     [switch]$Gpu,
     [switch]$SkipPyDeps,
     [string]$PythonVersion = "3.11.9",
-    [string]$FfmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+    [string]$FfmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+    [string]$SentryDsn = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -124,6 +131,22 @@ Copy-Item (Join-Path $Root "README.md")        $Dist
 
 # ---------- 6. Launcher ----------
 Copy-Item (Join-Path $PSScriptRoot "launcher.bat") (Join-Path $Dist "TennisTagger.bat") -Force
+
+# ---------- 6b. Sentry DSN ----------
+# Bake the DSN into a sentry.dsn file alongside the binary so the installed
+# app reports crashes without each end user having to set env vars. If the
+# DSN is empty, Sentry stays a no-op.
+$dsnFile = Join-Path $Dist "sentry.dsn"
+$dsn = $SentryDsn
+if (-not $dsn) { $dsn = $env:TENNIS_TAGGER_SENTRY_DSN }
+if ($dsn) {
+    Write-Host "==> Writing sentry.dsn (telemetry enabled)" -ForegroundColor Cyan
+    Set-Content -Path $dsnFile -Value $dsn.Trim() -Encoding ASCII -NoNewline
+} elseif (Test-Path $dsnFile) {
+    # Stale DSN from a previous build — remove so an opt-out build doesn't
+    # silently re-enable telemetry.
+    Remove-Item -Force $dsnFile
+}
 
 # ---------- 7. Sanity check ----------
 Write-Host "==> Smoke test: tagger.exe --help" -ForegroundColor Cyan

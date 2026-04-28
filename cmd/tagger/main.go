@@ -14,22 +14,28 @@ import (
 	"github.com/liamp/tennis-tagger/internal/config"
 	"github.com/liamp/tennis-tagger/internal/modelshare"
 	"github.com/liamp/tennis-tagger/internal/pointmodel"
+	"github.com/liamp/tennis-tagger/internal/telemetry"
 )
 
 
-// runModelSubcommand handles `tagger model {export|import|merge}` for the
-// point model. Designed for two collaborators swapping weights via USB.
+// runModelSubcommand handles `tagger model {export|import|merge|publish|sync}` for
+// the point model. Designed for two collaborators swapping weights via USB
+// or a shared cloud folder (Dropbox / Drive / OneDrive).
 //
-//   export <out-dir>     write the local point model + manifest into a folder
-//   import <bundle-dir>  replace the local point model with the bundle's
-//   merge  <bundle-dir>  average the bundle's weights into the local model
+//   export  <out-dir>      write the local point model + manifest into a folder
+//   import  <bundle-dir>   replace the local point model with the bundle's
+//   merge   <bundle-dir>   average the bundle's weights into the local model
+//   publish <shared-root>  export to <shared-root>/<machine-id>/<ts>/
+//   sync    <shared-root>  merge any newer bundles from OTHER machines under
+//                          <shared-root>, oldest-first; tracks state so
+//                          re-runs are idempotent
 //
-// All three operate on files/models/point_model/current/best.pt.
+// All operate on files/models/point_model/current/best.pt.
 func runModelSubcommand(args []string) {
 	const localPt = "files/models/point_model/current/best.pt"
 
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: tagger model <export|import|merge> <path>")
+		fmt.Fprintln(os.Stderr, "usage: tagger model <export|import|merge|publish|sync> <path>")
 		os.Exit(2)
 	}
 	verb := args[0]
@@ -102,8 +108,75 @@ func runModelSubcommand(args []string) {
 		}
 		fmt.Printf("Merged %s's model (%s) into %s\n", m.Author, m.CreatedAt, localPt)
 
+	case "publish":
+		fs := flag.NewFlagSet("model publish", flag.ExitOnError)
+		author := fs.String("author", "", "Your name (shown in the manifest)")
+		notes := fs.String("notes", "", "Optional free-text note")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() != 1 {
+			fmt.Fprintln(os.Stderr, "usage: tagger model publish [--author NAME] [--notes TEXT] <shared-root>")
+			os.Exit(2)
+		}
+		bundleDir, m, err := modelshare.PublishBundle(localPt, fs.Arg(0), *author, *notes)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "publish failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Published %s (%.1f MB) to %s\n",
+			m.ModelKind, float64(m.SizeBytes)/(1024*1024), bundleDir)
+
+	case "sync":
+		fs := flag.NewFlagSet("model sync", flag.ExitOnError)
+		python := fs.String("python", "python", "Python interpreter")
+		dryRun := fs.Bool("dry-run", false, "List new bundles without merging")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() != 1 {
+			fmt.Fprintln(os.Stderr, "usage: tagger model sync [--dry-run] <shared-root>")
+			os.Exit(2)
+		}
+		sharedRoot := fs.Arg(0)
+		state := modelshare.LoadSyncState(localPt)
+		bundles, err := modelshare.FindNewBundles(sharedRoot, state)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
+			os.Exit(1)
+		}
+		if len(bundles) == 0 {
+			fmt.Println("Already up to date.")
+			return
+		}
+		fmt.Printf("Found %d new bundle(s) to merge:\n", len(bundles))
+		for _, b := range bundles {
+			fmt.Printf("  %s @ %s  (%s, %.1f MB)\n",
+				b.MachineID[:8], b.Timestamp, b.Manifest.Author,
+				float64(b.Manifest.SizeBytes)/(1024*1024))
+		}
+		if *dryRun {
+			return
+		}
+		for _, b := range bundles {
+			if err := modelshare.VerifyChecksum(b.Path, b.Manifest); err != nil {
+				fmt.Fprintf(os.Stderr, "skip %s: %v\n", b.Path, err)
+				continue
+			}
+			cmd := exec.Command(*python, filepath.Join("ml", "merge_models.py"),
+				"--out", localPt, localPt,
+				filepath.Join(b.Path, b.Manifest.WeightsFilename))
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "merge %s failed: %v\n", b.Path, err)
+				os.Exit(1)
+			}
+			state.LastSeen[b.MachineID] = b.Timestamp
+			if err := state.Save(localPt); err != nil {
+				fmt.Fprintf(os.Stderr, "save sync state: %v\n", err)
+			}
+			fmt.Printf("Merged %s @ %s\n", b.MachineID[:8], b.Timestamp)
+		}
+
 	default:
-		fmt.Fprintf(os.Stderr, "unknown verb %q (expected export, import, or merge)\n", verb)
+		fmt.Fprintf(os.Stderr, "unknown verb %q (expected export, import, merge, publish, or sync)\n", verb)
 		os.Exit(2)
 	}
 }
@@ -156,6 +229,10 @@ func loadMatchSetup(videoPath string) (*bridge.MatchSetup, error) {
 }
 
 func main() {
+	telemetry.Init("tagger")
+	defer telemetry.Flush()
+	defer telemetry.CaptureRecover()
+
 	// Subcommand dispatch (kept simple to avoid restructuring the existing flag set).
 	if len(os.Args) >= 2 && os.Args[1] == "model" {
 		runModelSubcommand(os.Args[2:])

@@ -22,6 +22,18 @@ from typing import Any, Optional
 
 import numpy as np
 
+try:
+    from ml._telemetry import init_telemetry
+except ImportError:
+    try:
+        from _telemetry import init_telemetry
+    except ImportError:
+        def init_telemetry(component, release=None): return False
+try:
+    init_telemetry("bridge_server")
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Logging — all output goes to stderr so stdout stays clean for JSON-RPC
 # ---------------------------------------------------------------------------

@@ -16,6 +16,12 @@ files/data/features/
 *.log
 build_err.txt
 
+# Sentry DSN — never commit; injected at build time from CI secret
+sentry.dsn
+
+# Local sync config — per-machine path to the shared Dropbox folder
+files/sync_config.json
+
 # Session data
 .claude/
 

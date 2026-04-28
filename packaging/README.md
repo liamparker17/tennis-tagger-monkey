@@ -26,6 +26,10 @@ powershell -ExecutionPolicy Bypass -File .\packaging\build_bundle.ps1
 
 # Iterating on the installer without re-running pip
 .\packaging\build_bundle.ps1 -SkipPyDeps
+
+# Bake a Sentry DSN into the bundle so crashes from end users are reported
+.\packaging\build_bundle.ps1 -SentryDsn 'https://abc@o123.ingest.sentry.io/456'
+# (or set $env:TENNIS_TAGGER_SENTRY_DSN before invoking — CI-friendly)
 ```
 
 This produces `dist\TennisTagger\` with everything needed to run the app.

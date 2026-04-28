@@ -8,3 +8,4 @@ numpy>=2.0
 scipy>=1.14
 easyocr>=1.7
 librosa>=0.10
+sentry-sdk>=2.0

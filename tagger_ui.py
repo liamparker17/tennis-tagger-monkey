@@ -10,6 +10,7 @@ Run with:
 
 from __future__ import annotations
 
+import os
 import queue
 import shutil
 import subprocess
@@ -19,6 +20,12 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import END, filedialog, messagebox, simpledialog, ttk
+
+try:
+    from ml._telemetry import init_telemetry
+    init_telemetry("tagger_ui")
+except Exception:
+    pass
 
 
 # Prefer console-attached python.exe over pythonw.exe for child processes so
@@ -86,6 +93,79 @@ def _last_epoch_from_log(text: str) -> int:
             pass
     return last
 
+
+# ---- Dropbox sync helpers ----------------------------------------------------
+# Detection: Dropbox writes the user's actual install path (which can be
+# anywhere — D:\Dropbox, OneDrive-style relocations, etc.) to
+# %LOCALAPPDATA%\Dropbox\info.json. That's the authoritative source. Falling
+# back to %USERPROFILE%\Dropbox catches the case where info.json hasn't been
+# created yet (very fresh install) but the default folder is there.
+
+def _dropbox_root() -> Path | None:
+    """Return the local Dropbox folder root, or None if Dropbox isn't set up.
+
+    Reads %LOCALAPPDATA%\\Dropbox\\info.json — the file Dropbox itself writes
+    so other tools can find the install path. The file has a top-level key
+    per account type ('personal', 'business'); we prefer 'personal'.
+    """
+    import json as _json
+    local_app = os.environ.get("LOCALAPPDATA")
+    if local_app:
+        info = Path(local_app) / "Dropbox" / "info.json"
+        if info.is_file():
+            try:
+                doc = _json.loads(info.read_text(encoding="utf-8"))
+                for key in ("personal", "business"):
+                    if key in doc and "path" in doc[key]:
+                        p = Path(doc[key]["path"])
+                        if p.is_dir():
+                            return p
+            except (ValueError, OSError):
+                pass
+    # Fallback: standard default location.
+    home = Path(os.path.expanduser("~"))
+    for candidate in (home / "Dropbox", home / "Dropbox (Personal)"):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _load_sync_config() -> dict:
+    import json as _json
+    if not SYNC_CONFIG_PATH.is_file():
+        return {}
+    try:
+        return _json.loads(SYNC_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+
+
+def _save_sync_config(cfg: dict) -> None:
+    import json as _json
+    SYNC_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SYNC_CONFIG_PATH.write_text(_json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def _sync_shared_path() -> Path | None:
+    cfg = _load_sync_config()
+    p = cfg.get("shared_folder")
+    if not p:
+        return None
+    path = Path(p)
+    return path if path.is_dir() else None
+
+
+def _is_under_dropbox(path: Path) -> bool:
+    db = _dropbox_root()
+    if db is None:
+        return False
+    try:
+        path.resolve().relative_to(db.resolve())
+        return True
+    except ValueError:
+        return False
+# -------------------------------------------------------------------------
+
 REPO = Path(__file__).resolve().parent
 TAGGER_EXE = REPO / "tagger.exe"
 PREFLIGHT_SCRIPT = REPO / "preflight.py"
@@ -94,6 +174,8 @@ DARTFISH_SCRIPT = REPO / "ml" / "dartfish_to_yolo.py"
 TRAIN_SCRIPT = REPO / "ml" / "train_yolo_ball.py"
 TRACKNET_WEIGHTS = REPO / "models" / "tracknetv2_tennis_wasb.pt"
 TRAINING_PAIRS_DIR = REPO / "files" / "data" / "training_pairs"
+SYNC_CONFIG_PATH = REPO / "files" / "sync_config.json"
+SHARED_SUBFOLDER_NAME = "TennisTagger-shared"
 
 # ---- Palette ----
 BG       = "#0f1419"
@@ -373,6 +455,8 @@ class App:
                    command=self.show_adv_labels_then_train).pack(side="left", padx=(8, 0))
         ttk.Button(adv, text="Manage training set", style="Ghost.TButton",
                    command=self.show_manage_training).pack(side="left", padx=(4, 0))
+        ttk.Button(adv, text="Sync with collaborator (Dropbox)", style="Ghost.TButton",
+                   command=self.show_sync_hub).pack(side="left", padx=(4, 0))
         ttk.Button(adv, text="Share with a friend (USB)", style="Ghost.TButton",
                    command=self.show_share_hub).pack(side="left", padx=(4, 0))
 
@@ -1338,6 +1422,264 @@ class App:
             f"{verb} successfully",
             f"{verb} {manifest.get('author','your friend')}'s model into yours."
             f"{backup_msg}\n\nRe-tag a known match to sanity-check the result.",
+        )
+        self.show_home()
+
+    # ---- Sync via shared cloud folder (Dropbox) -----------------------------
+
+    def show_sync_hub(self) -> None:
+        """Entry point. If never set up, run the wizard; else show actions."""
+        cfg = _load_sync_config()
+        configured = _sync_shared_path()
+        if not cfg or configured is None:
+            self.show_sync_setup_step1()
+            return
+
+        self._clear_body()
+        self._show_back(step_text="Sync with collaborator")
+
+        wrap = tk.Frame(self.body, bg=BG)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text="Sync with collaborator",
+                 font=FONT_QUESTION, fg=TEXT, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(20, 6))
+        tk.Label(wrap,
+                 text=f"Shared folder: {configured}",
+                 font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w", wraplength=720, justify="left"
+                 ).pack(fill="x", pady=(0, 4))
+        if _is_under_dropbox(configured):
+            tk.Label(wrap, text="Dropbox detected — files will sync automatically.",
+                     font=FONT_SUB, fg=OK, bg=BG, anchor="w"
+                     ).pack(fill="x", pady=(0, 16))
+        else:
+            tk.Label(wrap,
+                     text="Note: this folder is NOT inside Dropbox. It will only sync if some "
+                          "other service (Drive, OneDrive, etc.) is watching it.",
+                     font=FONT_SUB, fg=DANGER, bg=BG, anchor="w", wraplength=720, justify="left"
+                     ).pack(fill="x", pady=(0, 16))
+
+        local_pt = REPO / "files" / "models" / "point_model" / "current" / "best.pt"
+        has_pt = local_pt.exists()
+
+        OptionButton(
+            wrap,
+            title="Publish my latest training",
+            subtitle=("Push a copy of your trained model to the shared folder so your collaborator "
+                      "can merge it. Goes into a subfolder tagged with this machine's ID."
+                      if has_pt else
+                      "You haven't trained a model yet — train one first, then come back here."),
+            command=self._sync_do_publish if has_pt else (lambda: messagebox.showinfo(
+                "Nothing to publish yet", "Train the point model first.")),
+            primary=has_pt,
+        ).pack(fill="x", pady=8)
+
+        OptionButton(
+            wrap,
+            title="Pull my collaborator's latest",
+            subtitle="Look in the shared folder for any new bundles from other machines and "
+                     "merge them into your local model. Safe to run repeatedly — already-merged "
+                     "bundles are skipped.",
+            command=self._sync_do_pull,
+        ).pack(fill="x", pady=8)
+
+        # Subtle "change folder" link in case they want to reconfigure.
+        change = tk.Frame(wrap, bg=BG)
+        change.pack(fill="x", pady=(20, 0))
+        ttk.Button(change, text="Change shared folder…", style="Ghost.TButton",
+                   command=self.show_sync_setup_step1).pack(side="left")
+
+    def show_sync_setup_step1(self) -> None:
+        """Step 1 of 2: explain the model, check for Dropbox install."""
+        self._clear_body()
+        self._show_back(step_text="Sync setup — Step 1 of 2")
+
+        wrap = tk.Frame(self.body, bg=BG)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text="One-time sync setup",
+                 font=FONT_QUESTION, fg=TEXT, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(20, 6))
+        tk.Label(wrap,
+                 text="Tennis Tagger uses a shared cloud folder so two collaborators can merge "
+                      "their training without USB sticks. Every machine signs into the same "
+                      "Dropbox account; the tagger reads/writes a folder inside Dropbox and "
+                      "Dropbox handles the cross-device sync.",
+                 font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w", wraplength=720, justify="left"
+                 ).pack(fill="x", pady=(0, 16))
+
+        db = _dropbox_root()
+        if db is None:
+            tk.Label(wrap, text="Dropbox isn't installed on this machine yet.",
+                     font=FONT_OPTION, fg=DANGER, bg=BG, anchor="w"
+                     ).pack(fill="x", pady=(8, 4))
+            tk.Label(wrap,
+                     text=("Install the Dropbox desktop client and sign into the account that "
+                           "all tagger machines will share. When the Dropbox folder appears in "
+                           "your home directory, come back here."),
+                     font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w", wraplength=720, justify="left"
+                     ).pack(fill="x", pady=(0, 12))
+            ttk.Button(wrap, text="Open dropbox.com/install", style="Ghost.TButton",
+                       command=lambda: self._open_path("https://www.dropbox.com/install")
+                       ).pack(anchor="w", pady=(0, 16))
+            ttk.Button(wrap, text="Re-check for Dropbox", style="Ghost.TButton",
+                       command=self.show_sync_setup_step1
+                       ).pack(anchor="w")
+            ttk.Button(wrap,
+                       text="Skip Dropbox — point me at any folder instead",
+                       style="Ghost.TButton",
+                       command=self.show_sync_setup_step2_browse
+                       ).pack(anchor="w", pady=(8, 0))
+            return
+
+        tk.Label(wrap, text=f"Dropbox detected: {db}",
+                 font=FONT_OPTION, fg=OK, bg=BG, anchor="w"
+                 ).pack(fill="x", pady=(8, 4))
+
+        proposed = db / SHARED_SUBFOLDER_NAME
+        tk.Label(wrap,
+                 text=f"Recommended folder: {proposed}",
+                 font=FONT_SUB, fg=TEXT_DIM, bg=BG, anchor="w", wraplength=720, justify="left"
+                 ).pack(fill="x", pady=(0, 16))
+
+        OptionButton(
+            wrap,
+            title=f"Use {SHARED_SUBFOLDER_NAME} (recommended)",
+            subtitle="I'll create the folder inside your Dropbox if it isn't already there, "
+                     "then store the path so you don't have to pick it again.",
+            command=lambda: self._sync_finalize(proposed),
+            primary=True,
+        ).pack(fill="x", pady=8)
+
+        OptionButton(
+            wrap,
+            title="Pick a different folder inside Dropbox",
+            subtitle="If you already have a folder you'd rather use, browse to it.",
+            command=self.show_sync_setup_step2_browse,
+        ).pack(fill="x", pady=8)
+
+    def show_sync_setup_step2_browse(self) -> None:
+        """Manual folder picker (fallback or alternative to the recommended path)."""
+        db = _dropbox_root()
+        initial = str(db) if db else str(Path.home())
+        chosen = filedialog.askdirectory(
+            title="Pick the shared folder (inside Dropbox)",
+            initialdir=initial,
+            mustexist=False,
+        )
+        if not chosen:
+            return
+        self._sync_finalize(Path(chosen))
+
+    def _sync_finalize(self, folder: Path) -> None:
+        """Create the folder if needed, save config, jump back to the hub."""
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror("Couldn't create folder", str(e))
+            return
+        cfg = _load_sync_config()
+        cfg["shared_folder"] = str(folder)
+        try:
+            _save_sync_config(cfg)
+        except OSError as e:
+            messagebox.showerror("Couldn't save settings", str(e))
+            return
+        warning = ""
+        if not _is_under_dropbox(folder):
+            warning = ("\n\nThis folder is NOT inside Dropbox — it'll only sync across machines if "
+                       "some other service is watching it.")
+        messagebox.showinfo(
+            "Sync folder set",
+            f"Tennis Tagger will publish and pull from:\n{folder}{warning}",
+        )
+        self.show_sync_hub()
+
+    def _sync_do_publish(self) -> None:
+        if not self._require(TAGGER_EXE, "tagger.exe is missing"):
+            return
+        folder = _sync_shared_path()
+        if folder is None:
+            messagebox.showerror("Sync not set up", "Set the shared folder first.")
+            self.show_sync_setup_step1()
+            return
+        author = simpledialog.askstring(
+            "Your name",
+            "Your name (so the manifest shows whose training round this is):",
+            parent=self.root,
+        )
+        if author is None:
+            return
+        cmd = [str(TAGGER_EXE), "model", "publish",
+               "--author", (author or "anonymous"), str(folder)]
+        try:
+            r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=120)
+        except Exception as e:
+            messagebox.showerror("Publish failed", str(e))
+            return
+        if r.returncode != 0:
+            messagebox.showerror("Publish failed", (r.stderr or r.stdout or "Unknown error").strip())
+            return
+        messagebox.showinfo(
+            "Published",
+            f"Pushed your trained model to the shared folder.\n\n{r.stdout.strip()}\n\n"
+            "Dropbox will sync it to your collaborator within a minute. They run "
+            "'Pull my collaborator's latest' to merge it in.",
+        )
+        self.show_sync_hub()
+
+    def _sync_do_pull(self) -> None:
+        if not self._require(TAGGER_EXE, "tagger.exe is missing"):
+            return
+        folder = _sync_shared_path()
+        if folder is None:
+            messagebox.showerror("Sync not set up", "Set the shared folder first.")
+            self.show_sync_setup_step1()
+            return
+
+        # Dry-run first so we can show the user what's about to happen.
+        cmd_dry = [str(TAGGER_EXE), "model", "sync", "--dry-run", str(folder)]
+        try:
+            r = subprocess.run(cmd_dry, cwd=str(REPO), capture_output=True, text=True, timeout=30)
+        except Exception as e:
+            messagebox.showerror("Sync check failed", str(e))
+            return
+        if r.returncode != 0:
+            messagebox.showerror("Sync check failed", (r.stderr or r.stdout or "").strip())
+            return
+        out = (r.stdout or "").strip()
+        if "Already up to date" in out:
+            messagebox.showinfo("Up to date",
+                                "No new bundles in the shared folder. Nothing to merge.")
+            return
+        if not messagebox.askyesno(
+            "Merge new bundles?",
+            f"{out}\n\nMerge these into your local model? Your current model will be backed up first.",
+        ):
+            return
+
+        # Back up before merging anything.
+        local_pt = REPO / "files" / "models" / "point_model" / "current" / "best.pt"
+        if local_pt.exists():
+            backup = local_pt.with_name(f"best.before-sync-{_timestamp()}.pt")
+            try:
+                shutil.copy2(local_pt, backup)
+            except OSError as e:
+                messagebox.showerror("Backup failed", str(e))
+                return
+
+        cmd = [str(TAGGER_EXE), "model", "sync", "--python", PYEXE, str(folder)]
+        try:
+            r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=600)
+        except Exception as e:
+            messagebox.showerror("Sync failed", str(e))
+            return
+        if r.returncode != 0:
+            messagebox.showerror("Sync failed", (r.stderr or r.stdout or "Unknown error").strip())
+            return
+        messagebox.showinfo(
+            "Synced",
+            f"Done.\n\n{r.stdout.strip()}\n\nRe-tag a known match to sanity-check the merged model.",
         )
         self.show_home()
 

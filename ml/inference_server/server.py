@@ -4,6 +4,12 @@ from dataclasses import asdict
 from pathlib import Path
 from .predict import Predictor
 
+try:
+    from ml._telemetry import init_telemetry
+    init_telemetry("inference_server")
+except Exception:
+    pass
+
 
 def _to_dict(pred):
     return {

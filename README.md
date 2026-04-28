@@ -224,9 +224,54 @@ Writes `<video>_output.csv` — Dartfish-compatible tagging.
 
 ## Sharing trained models with a collaborator
 
-Two collaborators training the point model on different footage can pool
-their results weekly via USB swap. The launcher's "Share with a friend (USB)"
-screen walks you through it. CLI equivalents:
+Two taggers training the point model on different matches can pool their
+results so both machines converge to the same unified model faster — both
+people training in parallel on different footage, weights merged after
+every round.
+
+### Recommended: shared cloud folder
+
+Pick any folder service both machines already sync (Dropbox, Google Drive,
+OneDrive). Each machine publishes its trained model into the shared folder;
+each machine syncs from it.
+
+```bash
+# Person A finishes training:
+./tagger.exe model publish --author alice "D:/Dropbox/TennisTagger/shared"
+
+# Person B picks up everyone else's progress:
+./tagger.exe model sync "D:/Dropbox/TennisTagger/shared"
+```
+
+Layout under the shared folder:
+
+```
+shared/
+  146ef67e.../              <- machine A's publishes (each machine has a stable id)
+    2026-04-28T204700Z/     <- one bundle per training round
+      manifest.json
+      weights.pt
+    2026-04-29T193000Z/
+      ...
+  92ff8c12.../              <- machine B's publishes
+    ...
+```
+
+`sync` walks the folder, ignores your own machine's publishes, finds bundles
+newer than the last one you merged from each remote machine (state stored at
+`files/models/point_model/current/.sync-state.json`), and merges each in
+chronological order. Re-running `sync` is safe — already-merged bundles are
+skipped. Add `--dry-run` to list new bundles without merging.
+
+A typical round: both machines start from the same `best.pt`, each labels
++ trains on a different match for a day or two, both `model publish`, both
+`model sync`, both restart training from the merged weights. Repeat.
+
+### USB fallback
+
+When taggers don't share a cloud folder, the same bundle format works on
+USB. The launcher's "Share with a friend (USB)" screen walks you through
+it. CLI equivalents:
 
 ```bash
 # Send: write your trained model + a manifest into an empty folder
@@ -235,7 +280,7 @@ screen walks you through it. CLI equivalents:
 # Receive (option A): replace your model with theirs
 ./tagger.exe model import /e/usb/friend-week17
 
-# Receive (option B): average theirs into yours — recommended weekly flow
+# Receive (option B): average theirs into yours
 ./tagger.exe model merge /e/usb/friend-week17
 ```
 
@@ -255,3 +300,31 @@ python -m pytest ml/tests/ -v
 ```
 
 Tests that need sample video or pretrained weights skip when those aren't present.
+
+## Crash reporting (Sentry)
+
+When a tagger out in the field hits a crash, it gets reported back to a
+Sentry project with the stack trace, OS, and version — no manual bug report
+needed. Both the Go pipeline and every Python entry point (UI, Preflight,
+bridge, training, inference) wire the same DSN.
+
+**For end users** — nothing to set up; reports are sent automatically when
+the bundle ships with a `sentry.dsn` file. Anyone can opt out by setting
+`TENNIS_TAGGER_TELEMETRY=off` in their environment before launching.
+
+**For maintainers** — to enable reporting in your builds:
+
+1. Create a Sentry project at sentry.io (free tier covers a small team).
+2. Copy the DSN.
+3. Build the bundle with the DSN baked in:
+
+   ```powershell
+   .\packaging\build_bundle.ps1 -SentryDsn 'https://abc@o123.ingest.sentry.io/456'
+   ```
+
+   Or set `TENNIS_TAGGER_SENTRY_DSN` in the build environment. CI:
+   add the DSN as a repo secret and pass it through to `build_bundle.ps1`.
+
+The DSN ends up at `<install-dir>\sentry.dsn`. Username and home-directory
+paths are scrubbed from every event before send (player names appear in
+match filenames, so this matters).

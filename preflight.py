@@ -30,6 +30,12 @@ from tkinter import (
 import cv2
 import numpy as np
 
+try:
+    from ml._telemetry import init_telemetry
+    init_telemetry("preflight")
+except Exception:
+    pass
+
 HUGE = ("Segoe UI", 20, "bold")
 BIG = ("Segoe UI", 14)
 MED = ("Segoe UI", 12)
