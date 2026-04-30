@@ -3,7 +3,7 @@
 ; Produces: dist\TennisTagger-Setup-<version>.exe
 
 #define MyAppName       "Tennis Tagger"
-#define MyAppVersion    "0.2.2"
+#define MyAppVersion    "0.2.3"
 #define MyAppPublisher  "Liam Parker"
 #define MyAppExeName    "TennisTagger.bat"
 #define MyBundleDir     "..\dist\TennisTagger"
