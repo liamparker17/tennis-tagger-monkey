@@ -136,6 +136,9 @@ Copy-Item (Join-Path $Root "README.md")        $Dist
 
 # ---------- 6. Launcher ----------
 Copy-Item (Join-Path $PSScriptRoot "launcher.bat") (Join-Path $Dist "TennisTagger.bat") -Force
+# _launch.py wraps tagger_ui.py and writes any uncaught traceback to
+# launcher.log so silent failures under pythonw.exe leave a trace.
+Copy-Item (Join-Path $PSScriptRoot "_launch.py")   (Join-Path $Dist "_launch.py")   -Force
 
 # ---------- 6b. Sentry DSN ----------
 # Bake the DSN into a sentry.dsn file alongside the binary so the installed
