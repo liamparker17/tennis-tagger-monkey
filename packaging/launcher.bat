@@ -13,5 +13,7 @@ set "TENNIS_TAGGER_PYTHON=%APP_DIR%python\python.exe"
 cd /d "%APP_DIR%"
 
 REM Use pythonw.exe so the GUI launches without a console window.
-start "" "%APP_DIR%python\pythonw.exe" "%APP_DIR%tagger_ui.py" %*
+REM _launch.py wraps tagger_ui.py and redirects stderr to launcher.log so
+REM silent crashes (missing module, broken wheel, etc.) leave a trace.
+start "" "%APP_DIR%python\pythonw.exe" "%APP_DIR%_launch.py" %*
 endlocal

@@ -13,13 +13,16 @@ AppId={{8C2F9E14-7B6D-4A6B-9F1E-7C0A1A0B2D33}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\TennisTagger
+; Per-user install only. The app writes to its own dir at runtime
+; (sync_config.json, model backups, runs/), which fails under Program Files
+; without elevation. Forcing %LOCALAPPDATA% means no UAC prompt and no
+; PermissionError surprises.
+DefaultDirName={localappdata}\Programs\TennisTagger
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\dist
 OutputBaseFilename=TennisTagger-Setup-{#MyAppVersion}
 Compression=lzma2/ultra64
@@ -56,6 +59,8 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 Type: filesandordirs; Name: "{app}\python\Lib\site-packages\__pycache__"
 Type: filesandordirs; Name: "{app}\runs"
 Type: filesandordirs; Name: "{app}\__pycache__"
+Type: files;          Name: "{app}\launcher.log"
+Type: files;          Name: "{app}\sync_config.json"
 
 [Code]
 function InitializeSetup(): Boolean;
