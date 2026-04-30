@@ -18,6 +18,9 @@ param(
     [switch]$Gpu,
     [switch]$SkipPyDeps,
     [string]$PythonVersion = "3.11.9",
+    # python-build-standalone release tag. Pinned for reproducibility; bump as needed.
+    # See https://github.com/astral-sh/python-build-standalone/releases
+    [string]$PythonBuildTag = "20240814",
     [string]$FfmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
     [string]$SentryDsn = ""
 )
@@ -45,37 +48,39 @@ try {
     Pop-Location
 }
 
-# ---------- 2. Embedded Python ----------
-$PyZip = Join-Path $Cache "python-$PythonVersion-embed-amd64.zip"
-if (-not (Test-Path $PyZip)) {
-    $url = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
+# ---------- 2. Standalone CPython (python-build-standalone) ----------
+# We use astral-sh/python-build-standalone instead of python.org's "embeddable"
+# zip because the embeddable build ships without tkinter, pip, ssl certs, and
+# a working stdlib site config. python-build-standalone is a full relocatable
+# CPython (~30MB extra) and includes tkinter/pip out of the box, which the
+# Tkinter-based tagger_ui.py requires.
+$PyTarball = Join-Path $Cache "cpython-$PythonVersion+$PythonBuildTag-windows.tar.gz"
+if (-not (Test-Path $PyTarball)) {
+    $url = "https://github.com/astral-sh/python-build-standalone/releases/download/$PythonBuildTag/cpython-$PythonVersion+$PythonBuildTag-x86_64-pc-windows-msvc-install_only.tar.gz"
     Write-Host "==> Downloading $url"
-    Invoke-WebRequest -Uri $url -OutFile $PyZip
+    Invoke-WebRequest -Uri $url -OutFile $PyTarball
 }
 
 if (-not $SkipPyDeps) {
     if (Test-Path $PyDir) { Remove-Item -Recurse -Force $PyDir }
-    Write-Host "==> Extracting embedded Python -> $PyDir"
-    Expand-Archive -Path $PyZip -DestinationPath $PyDir -Force
-
-    # Enable site-packages in embedded python (uncomment 'import site' in ._pth)
-    $pthFile = Get-ChildItem $PyDir -Filter "python*._pth" | Select-Object -First 1
-    if ($pthFile) {
-        $content = Get-Content $pthFile.FullName
-        $content = $content -replace '#\s*import site', 'import site'
-        $content += "`r`n..\ml`r`n.."
-        Set-Content -Path $pthFile.FullName -Value $content -Encoding ASCII
+    Write-Host "==> Extracting standalone Python -> $PyDir"
+    # The install_only tarball extracts to a top-level "python/" directory
+    # containing python.exe at its root. Extract to a temp dir then move into place.
+    $tmpPy = Join-Path $Cache "py_extract"
+    if (Test-Path $tmpPy) { Remove-Item -Recurse -Force $tmpPy }
+    New-Item -ItemType Directory -Path $tmpPy | Out-Null
+    & tar -xzf $PyTarball -C $tmpPy
+    if ($LASTEXITCODE -ne 0) { throw "tar extract failed for $PyTarball" }
+    $extractedPy = Join-Path $tmpPy "python"
+    if (-not (Test-Path (Join-Path $extractedPy "python.exe"))) {
+        throw "python.exe not found at expected path after extract: $extractedPy"
     }
+    Move-Item $extractedPy $PyDir
 
-    # Bootstrap pip
-    $getPip = Join-Path $Cache "get-pip.py"
-    if (-not (Test-Path $getPip)) {
-        Write-Host "==> Downloading get-pip.py"
-        Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPip
-    }
     $pyExe = Join-Path $PyDir "python.exe"
-    & $pyExe $getPip --no-warn-script-location
-    if ($LASTEXITCODE -ne 0) { throw "get-pip failed" }
+    # Sanity: tkinter + pip must import (this is the whole point of switching).
+    & $pyExe -c "import tkinter, pip; print('tk', tkinter.TkVersion); print('pip', pip.__version__)"
+    if ($LASTEXITCODE -ne 0) { throw "stdlib sanity check failed (tkinter/pip)" }
 
     # ---------- 3. Python deps ----------
     Write-Host "==> Installing PyTorch ($(if ($Gpu) {'CUDA 12.1'} else {'CPU'}))" -ForegroundColor Cyan
